@@ -11,6 +11,7 @@ import {
 import type { RawData, WebSocket } from "ws";
 import type { Log } from "./log.js";
 import { type Member, type Refusal, type Room, type Rooms, entriesAsOperations } from "./rooms.js";
+import { StorageError } from "./store.js";
 import { VERSION } from "./version.js";
 
 /**
@@ -38,6 +39,7 @@ const CLOSE_FOR: Record<Refusal["code"], number> = {
   bad_operation: CloseCode.BadOperation,
   not_yours: CloseCode.BadOperation,
   board_limit: CloseCode.BoardLimit,
+  storage_failed: CloseCode.StorageFailed,
 };
 
 export function handleConnection(ws: WebSocket, rooms: Rooms, log: Log): void {
@@ -55,6 +57,21 @@ export function handleConnection(ws: WebSocket, rooms: Rooms, log: Log): void {
     ws.close(CLOSE_FOR[refusal.code], refusal.code);
   }
 
+  /**
+   * The store failed: the room's replica may be ahead of the disk, so it
+   * is dropped (the next join reloads what is on disk), and the server
+   * takes no more edits until restarted. Nothing unstored was acknowledged.
+   */
+  function storageFailed(error: unknown, room: Room | null): void {
+    const message = error instanceof Error ? error.message : String(error);
+    log("storage failed", { error: message });
+    rooms.failed = message;
+    if (room && rooms.peek(room.board) === room) {
+      rooms.unload(room.board);
+    }
+    refuse({ code: "storage_failed", message: "the server cannot store this board; your edits are kept" });
+  }
+
   function hello(message: Extract<ClientMessage, { type: "hello" }>): void {
     if (joined) {
       refuse({ code: "bad_message", message: "already joined a board" });
@@ -67,7 +84,16 @@ export function handleConnection(ws: WebSocket, rooms: Rooms, log: Log): void {
       });
       return;
     }
-    const room = rooms.get(message.board);
+    let room: Room | null;
+    try {
+      room = rooms.get(message.board);
+    } catch (error) {
+      if (error instanceof StorageError) {
+        storageFailed(error, null);
+        return;
+      }
+      throw error;
+    }
     if (!room) {
       refuse({ code: "board_limit", message: `this server holds at most ${String(rooms.limits.maxBoards)} boards` });
       return;
@@ -124,6 +150,10 @@ export function handleConnection(ws: WebSocket, rooms: Rooms, log: Log): void {
       return;
     }
     const { room, member } = joined;
+    if (message.type !== "presence" && rooms.failed !== null) {
+      refuse({ code: "storage_failed", message: "the server cannot store boards until it is restarted; your edits are kept" });
+      return;
+    }
     if (message.type === "presence") {
       member.presence = message.presence;
       room.relay({ type: "presence", client: member.client, presence: message.presence }, member);
@@ -135,7 +165,16 @@ export function handleConnection(ws: WebSocket, rooms: Rooms, log: Log): void {
         refuse(refusal);
         return;
       }
-      const changed = room.apply(message.ops);
+      let changed: Operation[];
+      try {
+        changed = room.apply(message.ops);
+      } catch (error) {
+        if (error instanceof StorageError) {
+          storageFailed(error, room);
+          return;
+        }
+        throw error;
+      }
       if (changed.length > 0) {
         room.relay({ type: "ops", ops: changed }, member);
       }
@@ -151,7 +190,16 @@ export function handleConnection(ws: WebSocket, rooms: Rooms, log: Log): void {
       refuse(refusal);
       return;
     }
-    const changed = room.absorb(state);
+    let changed: Operation[];
+    try {
+      changed = room.absorb(state);
+    } catch (error) {
+      if (error instanceof StorageError) {
+        storageFailed(error, room);
+        return;
+      }
+      throw error;
+    }
     for (let i = 0; i < changed.length; i += 500) {
       room.relay({ type: "ops", ops: changed.slice(i, i + 500) }, member);
     }
@@ -163,6 +211,10 @@ export function handleConnection(ws: WebSocket, rooms: Rooms, log: Log): void {
       const { room, member } = joined;
       if (room.leave(member)) {
         room.relay({ type: "left", client: member.client }, member);
+      }
+      // The board is on disk: an empty room need not stay in memory.
+      if (room.members.size === 0 && rooms.peek(room.board) === room) {
+        rooms.unload(room.board);
       }
       log("left", { board: room.board, client: member.client, members: room.members.size });
     }

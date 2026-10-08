@@ -3,3 +3,5 @@ dist/
 *.tsbuildinfo
 coverage/
 .DS_Store
+# Boards, when the server runs outside Docker.
+data/

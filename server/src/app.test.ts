@@ -40,6 +40,7 @@ async function start(config: Partial<Config> = {}): Promise<{ app: App; port: nu
       host: "127.0.0.1",
       port: 0,
       clientDir: config.clientDir ?? (await clientDir()),
+      dataDir: ":memory:",
       shutdownGraceMs: 2000,
       heartbeatMs: 30_000,
       limits: DEFAULT_LIMITS,

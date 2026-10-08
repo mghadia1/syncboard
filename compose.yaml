@@ -4,9 +4,14 @@ services:
     ports:
       # 8300 on the host: SurgiServe uses 8000, Gatekeeper 8080, LogScope 8200.
       - "${SYNCBOARD_PORT:-8300}:8000"
+    volumes:
+      - syncboard-data:/data
     restart: unless-stopped
     # Time to tell open WebSocket clients the server is going away (it waits
     # up to 5 s for them) before Docker kills it. Set explicitly: on the
     # machine this was built on, `docker compose stop` killed containers
     # after about a second.
     stop_grace_period: 15s
+
+volumes:
+  syncboard-data:

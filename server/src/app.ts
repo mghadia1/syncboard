@@ -6,6 +6,7 @@ import { type WebSocket, WebSocketServer } from "ws";
 import type { Config } from "./config.js";
 import type { Log } from "./log.js";
 import { Rooms } from "./rooms.js";
+import { Store } from "./store.js";
 import { serveClient } from "./static.js";
 import { handleConnection } from "./sync.js";
 import { VERSION } from "./version.js";
@@ -46,7 +47,8 @@ function refuse(socket: Duplex, status: number, reason: string): void {
 
 export function createApp(config: Config, log: Log): App {
   const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
-  const rooms = new Rooms(config.limits);
+  const store = new Store(config.dataDir);
+  const rooms = new Rooms(store, config.limits);
   let closing: Promise<void> | undefined;
 
   // A connection that stops answering pings (a laptop that slept, a cable
@@ -73,8 +75,13 @@ export function createApp(config: Config, log: Log): App {
     }
     if (url.pathname === "/healthz") {
       if (req.method === "GET" || req.method === "HEAD") {
-        // Liveness only: the process is up and answering.
-        json(res, 200, { status: "ok", version: VERSION });
+        // The process is up and answering; and it can store boards, or
+        // says so (it takes no edits after a storage failure).
+        if (rooms.failed !== null) {
+          json(res, 503, { status: "storage failed", version: VERSION, error: rooms.failed });
+        } else {
+          json(res, 200, { status: "ok", version: VERSION });
+        }
       } else {
         json(res, 405, { error: "method not allowed" }, { Allow: "GET, HEAD" });
       }
@@ -156,6 +163,7 @@ export function createApp(config: Config, log: Log): App {
         // idle keep-alive connections are closed at once.
         server.close(() => {
           clearTimeout(grace);
+          store.close();
           resolve();
         });
         for (const ws of sockets.clients) {

@@ -9,6 +9,8 @@ describe("loadConfig", () => {
     const config = loadConfig({});
     expect(config).toMatchObject({ host: "0.0.0.0", port: 8000, shutdownGraceMs: 5000 });
     expect(config.clientDir.endsWith(path.join("client", "dist"))).toBe(true);
+    expect(config.dataDir.endsWith(`${path.sep}data`)).toBe(true);
+    expect(loadConfig({ SYNCBOARD_DATA_DIR: ":memory:" }).dataDir).toBe(":memory:");
   });
 
   test("reads SYNCBOARD_* variables", () => {
@@ -17,6 +19,7 @@ describe("loadConfig", () => {
         SYNCBOARD_HOST: "127.0.0.1",
         SYNCBOARD_PORT: "9000",
         SYNCBOARD_CLIENT_DIR: "/srv/client",
+        SYNCBOARD_DATA_DIR: "/srv/data",
         SYNCBOARD_SHUTDOWN_GRACE_MS: "100",
         SYNCBOARD_HEARTBEAT_MS: "5000",
         SYNCBOARD_MAX_BOARDS: "3",
@@ -26,6 +29,7 @@ describe("loadConfig", () => {
       host: "127.0.0.1",
       port: 9000,
       clientDir: "/srv/client",
+      dataDir: "/srv/data",
       shutdownGraceMs: 100,
       heartbeatMs: 5000,
       limits: { maxBoards: 3, maxShapes: 50 },

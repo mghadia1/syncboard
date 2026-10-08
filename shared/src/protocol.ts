@@ -48,7 +48,8 @@ export type ErrorCode =
   | "not_joined"
   | "bad_operation"
   | "not_yours"
-  | "board_limit";
+  | "board_limit"
+  | "storage_failed";
 
 /** Someone on the board, as presence tells it. */
 export type Peer = { readonly client: string; readonly presence: Presence };
@@ -91,6 +92,12 @@ export const CloseCode = {
   BadOperation: 4002,
   /** The server has as many boards, or the board as many shapes, as it allows. */
   BoardLimit: 4003,
+  /**
+   * The standard "internal error": the server could not store the board,
+   * and takes no more edits until it is restarted. Not final for a
+   * browser: it keeps its edits and resends them when the server is back.
+   */
+  StorageFailed: 1011,
 } as const;
 
 export type Parsed<T> = { ok: true; message: T } | { ok: false; error: string };
@@ -121,6 +128,7 @@ const ERROR_CODES: ReadonlySet<string> = new Set<ErrorCode>([
   "bad_operation",
   "not_yours",
   "board_limit",
+  "storage_failed",
 ]);
 
 function isErrorCode(value: unknown): value is ErrorCode {

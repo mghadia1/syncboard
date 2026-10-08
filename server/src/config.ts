@@ -7,6 +7,8 @@ export type Config = {
   port: number;
   /** The built client (client/dist): index.html and assets/. */
   clientDir: string;
+  /** Where boards are stored (boards.sqlite); ":memory:" for nowhere. */
+  dataDir: string;
   /** How long open connections get to close before the server stops anyway. */
   shutdownGraceMs: number;
   /** How often connections are pinged; one that has not answered by the next ping is cut off. */
@@ -38,6 +40,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host: env.SYNCBOARD_HOST ?? "0.0.0.0",
     port,
     clientDir: path.resolve(env.SYNCBOARD_CLIENT_DIR ?? path.join(here, "../../client/dist")),
+    dataDir:
+      env.SYNCBOARD_DATA_DIR === ":memory:"
+        ? ":memory:"
+        : path.resolve(env.SYNCBOARD_DATA_DIR ?? path.join(here, "../../data")),
     shutdownGraceMs: integer(env, "SYNCBOARD_SHUTDOWN_GRACE_MS", 5000),
     heartbeatMs: Math.max(100, integer(env, "SYNCBOARD_HEARTBEAT_MS", 30_000)),
     limits: {

@@ -9,14 +9,16 @@
 //                the welcome's snapshot
 //   presence     one client's pointer and name reach another; closing
 //                sends "left"
+//   write B      on board B, add a note and wait for its acknowledgement
+//   read B       join board B and say whether the notes written are there
 //   wait-close   say hello, print "ready", then print the close code when
 //                the server closes the connection (for the shutdown check)
 //
 // Prints what it saw; exits 1 if it was not what the check expects.
 
-const [url, check] = process.argv.slice(2);
+const [url, check, boardArg] = process.argv.slice(2);
 const PROTOCOL = 3;
-const BOARD = `smoke${Date.now().toString(36)}`;
+const BOARD = boardArg ?? `smoke${Date.now().toString(36)}`;
 
 function fail(message) {
   console.error(`FAIL ws ${check}: ${message}`);
@@ -114,6 +116,28 @@ switch (check) {
     if (left.client !== "smokeA") fail(`got ${JSON.stringify(left)}`);
     console.log("seen and left");
     b.ws.close();
+    break;
+  }
+  case "write": {
+    // A new writer each time, so its first edit can be counter 1.
+    const client = `writer${Date.now().toString(36)}`;
+    const w = await connect(client);
+    await w.hello();
+    w.send({
+      type: "ops",
+      ops: [{ shape: `${client}.1`, stamp: { counter: 1, client }, set: { kind: "note", x: 0, y: 0, w: 10, h: 10, z: "V", text: "kept" } }],
+    });
+    const ack = await w.next("ack");
+    if (ack.upTo !== 1) fail(`got ${JSON.stringify(ack)}`);
+    console.log("acked");
+    w.ws.close();
+    break;
+  }
+  case "read": {
+    const c = await connect(`reader${Date.now().toString(36)}`);
+    const welcome = await c.hello();
+    console.log(`${String(welcome.snapshot.length)} notes, epoch ${welcome.epoch}`);
+    c.ws.close();
     break;
   }
   case "wait-close": {

@@ -26,7 +26,7 @@ expect() { # expect NAME GOT WANT
   if [ "$2" != "$3" ]; then echo "FAIL $1: got $2, want $3" >&2; exit 1; fi
   echo "ok   $1: $2"
 }
-ws() { node "$here/ws-check.mjs" "$ws_url" "$1"; }
+ws() { node "$here/ws-check.mjs" "$ws_url" "$@"; }
 
 expect "health" "$(curl --fail --silent --show-error "$base_url/healthz")" '{"status":"ok","version":"0.1.0"}'
 expect "health HEAD" "$(status --head "$base_url/healthz")" "200"
@@ -66,6 +66,21 @@ expect "ws edits relayed, acknowledged, in a later joiner's snapshot" "$(ws rela
 expect "ws presence passed on, and a leave announced" "$(ws presence)" "seen and left"
 
 expect "runs as uid" "$(docker compose exec -T syncboard id -u)" "1000"
+expect "data volume writable" "$(docker compose exec -T syncboard sh -c 'touch /data/.probe && rm /data/.probe && echo yes')" "yes"
+
+# Boards are on disk: an acknowledged edit survives a clean restart, and a
+# SIGKILL of the container; the board keeps its epoch, so browsers that
+# reconnect resend only what was not acknowledged.
+board="smokedisk$(date +%s)"
+expect "an edit acknowledged" "$(ws write "$board")" "acked"
+before="$(ws read "$board")"
+docker compose restart syncboard > /dev/null 2>&1
+docker compose up --detach --wait > /dev/null 2>&1
+expect "after a restart, the board and its epoch" "$(ws read "$board")" "$before"
+expect "another edit acknowledged" "$(ws write "$board")" "acked"
+docker compose kill -s SIGKILL syncboard > /dev/null 2>&1
+docker compose up --detach --wait > /dev/null 2>&1
+expect "after a SIGKILL, both edits" "$(ws read "$board" | cut -d, -f1)" "2 notes"
 expect "container health" "$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q syncboard)")" "healthy"
 
 # A clean stop, with a client connected: it must be told 1001, and the

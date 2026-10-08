@@ -8,14 +8,14 @@ It deliberately does not use Yjs, Automerge, Liveblocks, Socket.IO,
 tldraw, Excalidraw, Konva or Fabric: the point is to build the sync (a CRDT
 for the board, and a WebSocket protocol to carry it) and the drawing.
 
-> **Status:** Milestones 0-4 of 7. Boards are shared: everyone with a
+> **Status:** Milestones 0-5 of 7. Boards are shared: everyone with a
 > board's link draws on it at once (shapes, arrows, freehand, notes;
 > select, move, resize, recolor, restack, delete; pan and zoom), sees who
 > else is there with their pointers and selections, keeps drawing through
 > a dropped connection, and ends up with the same board. Undo reverts only
-> your own changes, and leaves what others have changed since. Boards live in the server's memory: **a restart empties the
-> server**, and a board comes back only from the browsers that still have
-> it open, until persistence (Milestone 5).
+> your own changes. Boards are stored on disk (SQLite) before anything is
+> acknowledged, and survive restarts and SIGKILL (tested); power loss is
+> not tested.
 >
 > TypeScript is the language I am learning on this project (built with
 > Claude): it is not on my resume until I can write and explain it unaided.
@@ -29,7 +29,7 @@ for the board, and a WebSocket protocol to carry it) and the drawing.
 | 2 | Drawing, one person: shapes, freehand, sticky notes; select, move, resize, delete; pan and zoom; undo and redo, all through the CRDT | Done |
 | 3 | Realtime sync: rooms, a snapshot on joining, operations relayed and acknowledged, reconnection that resends, offline edits merged | Done |
 | 4 | Presence (cursors, selections, who is here) and undo of only your own changes | Done |
-| 5 | Persistence: an operation log and snapshots per board; SIGKILL test | Not started |
+| 5 | Persistence: boards on disk, stored before anything is acknowledged; restarts keep them; SIGKILL test | Done |
 | 6 | Two replicas sharing rooms through Redis pub/sub; load test of propagation latency and convergence | Not started |
 | 7 | README: diagram, design decisions, failures found, benchmarks; explain-it-yourself prompts | Not started |
 
@@ -42,7 +42,7 @@ make up        # build and start on :8300; waits until the health check passes
 open http://localhost:8300   # a new board: its address (/b/<id>) is its link
 # open the same link in a second window, and draw in both
 curl localhost:8300/healthz
-make down
+make down      # the boards stay in a Docker volume; `make reset` deletes them
 ```
 
 `make smoke` starts a separate stack on :8301, checks it from outside over
@@ -83,11 +83,13 @@ presence {name, color, cursor, selection} ─►   relayed as presence {client, 
   and resends everything still pending. An edit the server applied whose
   ack was lost arrives twice, which changes nothing (Milestone 1).
 - **A server that lost the board** is recognised by its `epoch`, a random
-  name for the server's copy of each board, new after every restart. A
-  browser that sees a different epoch from last time uploads everything it
-  knows, in frames of about 256 KB; the server merges it and relays what
-  was new to the others. So a restart empties the server, but a board
-  comes back as soon as anyone who has it open reconnects.
+  name for the server's copy of each board, stored with it. After a
+  restart the epoch is the same, and browsers resend only what was not
+  acknowledged. If the data was lost (a volume deleted), the board gets a
+  new epoch, and a browser that sees it uploads everything it knows, in
+  frames of about 256 KB; the server merges it and relays what was new to
+  the others. So even then, a board comes back as soon as anyone who has
+  it open reconnects.
 - **What the server refuses,** and the connection it closes: an edit not
   stamped by the sender (each replica sends only its own edits; **4002**),
   a malformed operation (**4002**), a counter above 2^52 (see Decisions;
@@ -153,12 +155,78 @@ presence {name, color, cursor, selection} ─►   relayed as presence {client, 
   tabs back with all three shapes; a reload, which starts from nothing,
   got them all from the server's rebuilt copy.
 
-What it does **not** do yet: keep boards on disk (Milestone 5); limit how
-fast a client may send (presence included: every message is passed to
+What it does **not** do yet: limit how fast a client may send (presence included: every message is passed to
 everyone else on the board), or drop a client too slow to read what it is sent (its frames
 queue in the server's memory); shrink what is pending (a drag made offline
 resends every intermediate position); send anything but the whole board
 on joining.
+
+## Boards on disk
+
+Boards are stored in SQLite (`/data/boards.sqlite` in the container, a
+Docker volume), through Node's built-in `node:sqlite`: no native module to
+build.
+
+- **A board is stored as its registers:** one row per shape property,
+  with its value and the stamp of the edit that set it. That is the
+  board's state itself, always complete, so there is no operation log to
+  replay on start and nothing to compact. (The roadmap said "an operation
+  log and periodic snapshots"; the registers make both unnecessary.)
+- **The merge rule is not written in SQL.** The server's replica decides
+  which value wins, as every browser's does, and the store writes the
+  registers it changed. A second copy in SQL would compare text by UTF-8
+  bytes where JavaScript compares UTF-16 code units, and the two could
+  disagree.
+- **Stored, then acknowledged.** For each batch of edits the server
+  applies, commits (WAL journal, `synchronous = FULL`: the commit returns
+  after an fsync), and only then relays and acknowledges. An edit the
+  server dies before storing was never acknowledged, so its browser still
+  has it pending and sends it again.
+- **A board is in memory only while someone is on it:** loaded from disk
+  on the first join, dropped when the last person leaves. The board
+  limit counts boards stored.
+- **If storing fails** (a full disk), the server takes no more edits until
+  it is restarted: the board's in-memory copy, now ahead of the disk, is
+  dropped, edits are refused with close code **1011** (which browsers
+  retry: they keep their edits pending), and `/healthz` answers 503 with
+  the error. Nothing that was not stored is acknowledged or relayed.
+- **A damaged row** stops its board loading with an error, rather than
+  being served: rows go through the same checks as edits from the network.
+
+### How it is tested
+
+- **SIGKILL, the server as its own process:** three writers send edits to
+  their own shapes as fast as they are acknowledged; the server is killed
+  at a random moment, six times over; then every edit ever acknowledged
+  must be on disk (its register holds that edit or a later one of the same
+  writer). One run: 10,322 acknowledged edits (21,454 registers) survived
+  six kills, with 196 edits in flight when the server died. The seed is
+  printed, to replay a failure.
+- Through the server: a restart keeps the board under the same epoch; a
+  board leaves memory when its last member does and comes back from disk;
+  the limit counts stored boards; a failing store refuses the edit, never
+  acknowledges or relays it, and health says so. The store itself: a
+  round trip (emoji, quotes, numbers, a deleted shape), a later save
+  replacing a register, a save that fails part-way leaving nothing, a
+  damaged row refused, WAL mode on.
+- End to end: a restart with the board on disk before anyone is back,
+  and a restart with the data deleted, where the browsers' uploads bring
+  it back; the random property test now restarts the server both ways.
+- The smoke test, on the real image: an acknowledged edit survives a
+  `docker compose restart` (same epoch) and a `docker compose kill -s
+  SIGKILL`.
+- **Three planted bugs** each fail the tests: acknowledging before
+  storing (the SIGKILL test catches it, and a deterministic one),
+  storing nothing, and a new epoch after every restart.
+- In a real browser: a note drawn, the container restarted while no page
+  had the board open, and the board, opened fresh, came back from disk.
+
+What it does **not** do: survive a power cut (a SIGKILL leaves the
+operating system's page cache intact; nothing here tests losing it, and
+Docker Desktop's virtual disk sits between the database and the real
+one); back boards up; delete boards; remove deleted shapes (tombstones)
+from disk; group the commits of several connections into one fsync (each
+batch is its own; Milestone 6 measures what that costs).
 
 ## Who else is here
 
@@ -334,7 +402,7 @@ What it does **not** do yet:
 
 | Path | Answer |
 |------|--------|
-| `GET /healthz` | `{"status": "ok", "version": "0.1.0"}`: liveness only |
+| `GET /healthz` | `{"status": "ok", "version": "0.1.0"}`; 503 with the error if boards cannot be stored |
 | `GET /`, `GET /b/<id>` | the client's `index.html`, `Cache-Control: no-cache`; a malformed board id is a 404 |
 | `GET /assets/<name>` | a built file, cached for a year (`immutable`): its name has a content hash |
 | `/ws` | the WebSocket; over plain HTTP, 426 |
@@ -374,7 +442,10 @@ make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
 | `client/src/People.tsx`, `client/src/canvas/Peers.tsx` | Who is here; others' pointers and selections |
 | `shared/src/presence.ts` | Presence: its type and its check |
 | `server/src/sync.ts` | One connection's protocol: hello, checks, apply, relay, ack |
-| `server/src/rooms.ts` | The boards in memory: one room and one replica each; limits |
+| `server/src/rooms.ts` | The boards being served: one room and one replica each, loaded from and written to the store; limits |
+| `server/src/store.ts` | Boards on disk (SQLite): their registers and epochs |
+| `server/src/store.test.ts` | The store: round trip, replacing, all-or-nothing saves, damaged rows |
+| `e2e/crash.test.ts` | The server as its own process, SIGKILLed six times while edits pour in |
 | `shared/src/board/snapshot.ts` | A whole board on the wire; chunking it; merging one |
 | `e2e/sync.test.ts`, `e2e/link.ts` | The server and three sync clients behind proxies that cut and block |
 | `client/src/board/editor.ts` | The board as the page edits it: the replica, undo and redo, gestures grouped into steps |
@@ -576,3 +647,14 @@ make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
     the name field opened with the cursor after the old name, so typing
     made "Amber KoalaSecond Tab". It now opens with the name selected;
     a test checks the selection.
+15. **The first SIGKILL test killed the wrong process.** It started the
+    server with the `tsx` command, which runs the script in a child process
+    of its own: the SIGKILL hit the wrapper, the server lived on, and the
+    test hung with seven servers left running (stopped by hand). The test
+    now starts Node itself with tsx as a loader, so the process killed is
+    the server, and nothing is left behind.
+16. **A store test failed for a reason the type checker knew.** It passed
+    a whole operation where a shape id belonged (`Replica.create` returns
+    the operation); SQLite refused to store an object, which is how it
+    showed. I had run the tests on their own; `npm run check` runs the
+    type checker first, which names the real error.

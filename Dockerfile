@@ -18,7 +18,8 @@ RUN npm run build
 FROM node:24-alpine
 
 ENV NODE_ENV=production \
-    SYNCBOARD_CLIENT_DIR=/app/client/dist
+    SYNCBOARD_CLIENT_DIR=/app/client/dist \
+    SYNCBOARD_DATA_DIR=/data
 
 WORKDIR /app
 
@@ -35,11 +36,16 @@ COPY --from=build /app/shared/dist shared/dist
 COPY --from=build /app/server/dist server/dist
 COPY --from=build /app/client/dist client/dist
 
+# Boards live in /data (boards.sqlite), a volume. Made here and owned by
+# the unprivileged user, because a new named volume copies the ownership of
+# the directory it is mounted over.
+RUN mkdir -p /data && chown node:node /data
+
 # The node image's unprivileged user.
 USER node
 EXPOSE 8000
 
-# Liveness only (GET /healthz).
+# GET /healthz: up and answering, and able to store boards (503 if not).
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
     CMD ["node", "server/dist/healthcheck.js"]
 

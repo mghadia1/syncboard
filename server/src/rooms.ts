@@ -1,25 +1,29 @@
 import {
   type BoardState,
+  type Entry,
   type ErrorCode,
   type Operation,
   PROP_NAMES,
   type Peer,
+  type PropName,
   type Presence,
   Replica,
   type ServerMessage,
+  type ShapeId,
   newBoardId,
 } from "@syncboard/shared";
+import type { Store } from "./store.js";
 
 /**
- * The boards the server holds, in memory (until persistence, Milestone 5):
- * one room per board, with the server's own replica of it and the
- * connections that have joined. The server never edits a board; its
- * replica only gathers everyone's operations, so that whoever joins next
- * can be sent the whole board.
+ * The boards the server is serving: one room per board, with the server's
+ * own replica of it and the connections that have joined. The server never
+ * edits a board; its replica gathers everyone's operations, decides what
+ * wins, and the store keeps the result. A room is loaded from the store
+ * when someone joins and dropped from memory when the last one leaves.
  */
 
 export type Limits = {
-  /** Boards held at once; a hello for a new board beyond this is refused. */
+  /** Boards stored; a hello for a new board beyond this is refused. */
   maxBoards: number;
   /** Shapes (live or deleted) on one board. */
   maxShapes: number;
@@ -43,15 +47,23 @@ export type Member = {
 export type Refusal = { code: ErrorCode; message: string };
 
 export class Room {
-  /** Names this copy of the board: a new one after every restart (see the protocol). */
-  readonly epoch = newBoardId();
   readonly replica = new Replica("server");
   readonly members = new Set<Member>();
 
+  /**
+   * `epoch` names the server's copy of the board (see the protocol). It is
+   * stored with the board, so a restart keeps it: browsers then resend only
+   * what was not acknowledged. A new one means the copy was lost.
+   */
   constructor(
     readonly board: string,
+    readonly epoch: string,
+    state: BoardState,
     private readonly limits: Limits,
-  ) {}
+    private readonly store: Store,
+  ) {
+    this.replica.merge(state);
+  }
 
 
   /**
@@ -76,14 +88,43 @@ export class Room {
     return null;
   }
 
-  /** Applies checked operations; returns the ones that changed something. */
+  /**
+   * Applies checked operations and stores what they changed, before
+   * returning; returns the ones that changed something. A StorageError
+   * leaves the replica ahead of the disk: the caller must drop the room.
+   */
   apply(ops: readonly Operation[]): Operation[] {
-    return ops.filter((op) => this.replica.apply(op));
+    const changed = ops.filter((op) => this.replica.apply(op));
+    this.#persist(changed);
+    return changed;
   }
 
-  /** Merges an uploaded (checked) state; returns what was new, as operations. */
+  /** Merges an uploaded (checked) state and stores what was new; returns it, as operations. */
   absorb(state: BoardState): Operation[] {
-    return this.replica.absorb(state);
+    const changed = this.replica.absorb(state);
+    this.#persist(changed);
+    return changed;
+  }
+
+  /**
+   * Writes the current register of every property the operations touched:
+   * the winner, which may be a later value than the operation's own.
+   */
+  #persist(ops: readonly Operation[]): void {
+    if (ops.length === 0) {
+      return;
+    }
+    const registers = new Map<string, readonly [ShapeId, PropName, Entry]>();
+    for (const op of ops) {
+      const shape = this.replica.state.get(op.shape);
+      for (const name of Object.keys(op.set) as PropName[]) {
+        const entry = shape?.[name];
+        if (entry) {
+          registers.set(JSON.stringify([op.shape, name]), [op.shape, name, entry]);
+        }
+      }
+    }
+    this.store.save(this.board, registers.values());
   }
 
   /** Sends to every member but one, and but its other connections. */
@@ -116,19 +157,36 @@ export class Room {
 
 export class Rooms {
   readonly #rooms = new Map<string, Room>();
+  /** Set when the store failed: no more writes until a restart. */
+  failed: string | null = null;
 
-  constructor(readonly limits: Limits = DEFAULT_LIMITS) {}
+  constructor(
+    readonly store: Store,
+    readonly limits: Limits = DEFAULT_LIMITS,
+  ) {}
 
-  /** The board's room, made if need be; null if that would exceed the limit. */
+  /**
+   * The board's room: in memory, or loaded from the store, or a new board
+   * (stored at once, with its epoch); null if a new one would exceed the
+   * limit. Throws StorageError if the store cannot read or write.
+   */
   get(board: string): Room | null {
     let room = this.#rooms.get(board);
-    if (!room) {
-      if (this.#rooms.size >= this.limits.maxBoards) {
+    if (room) {
+      return room;
+    }
+    const stored = this.store.load(board);
+    if (stored) {
+      room = new Room(board, stored.epoch, stored.state, this.limits, this.store);
+    } else {
+      if (this.store.boardCount >= this.limits.maxBoards) {
         return null;
       }
-      room = new Room(board, this.limits);
-      this.#rooms.set(board, room);
+      const epoch = newBoardId();
+      this.store.createBoard(board, epoch);
+      room = new Room(board, epoch, new Map(), this.limits, this.store);
     }
+    this.#rooms.set(board, room);
     return room;
   }
 
@@ -136,6 +194,12 @@ export class Rooms {
     return this.#rooms.get(board);
   }
 
+  /** Drops a room from memory: when its last member has left, or its replica got ahead of the disk. */
+  unload(board: string): void {
+    this.#rooms.delete(board);
+  }
+
+  /** Rooms in memory. */
   get size(): number {
     return this.#rooms.size;
   }

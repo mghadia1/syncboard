@@ -2,12 +2,22 @@ import { mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { CloseCode, type Operation, PROTOCOL_VERSION, Replica, serializeState, toSnapshot } from "@syncboard/shared";
+import {
+  CloseCode,
+  type Operation,
+  PROTOCOL_VERSION,
+  Replica,
+  type Snapshot,
+  fromSnapshot,
+  serializeState,
+  toSnapshot,
+} from "@syncboard/shared";
 import { afterEach, describe, expect, test } from "vitest";
 import WebSocket from "ws";
 import { type App, createApp } from "./app.js";
 import { silentLog } from "./log.js";
 import { DEFAULT_LIMITS, type Limits } from "./rooms.js";
+import { StorageError } from "./store.js";
 
 const running: App[] = [];
 const open: WebSocket[] = [];
@@ -23,13 +33,16 @@ afterEach(async () => {
   }
 });
 
-async function start(options: { limits?: Partial<Limits>; heartbeatMs?: number } = {}) {
-  dir = await mkdtemp(path.join(os.tmpdir(), "syncboard-"));
+async function start(options: { limits?: Partial<Limits>; heartbeatMs?: number; keepData?: boolean } = {}) {
+  if (!options.keepData || !dir) {
+    dir = await mkdtemp(path.join(os.tmpdir(), "syncboard-"));
+  }
   const app = createApp(
     {
       host: "127.0.0.1",
       port: 0,
       clientDir: dir,
+      dataDir: path.join(dir, "data"),
       shutdownGraceMs: 500,
       heartbeatMs: options.heartbeatMs ?? 30_000,
       limits: { ...DEFAULT_LIMITS, ...options.limits },
@@ -217,6 +230,64 @@ describe("presence", () => {
   });
 });
 
+describe("boards on disk", () => {
+  test("a restarted server has the board, under the same epoch", async () => {
+    const first = await start();
+    const { c: a, welcome } = await Client.join(first.port, "board01", "a");
+    const { create, move } = edits("a");
+    a.send({ type: "ops", ops: [create, move] });
+    await a.next("ack");
+    await first.app.close();
+    const second = await start({ keepData: true });
+    const { welcome: again } = await Client.join(second.port, "board01", "b");
+    expect(again.epoch).toBe(welcome.epoch); // so nobody re-uploads
+    const copy = new Replica("copy");
+    copy.merge(fromSnapshot(again.snapshot as Snapshot));
+    expect(copy.shape(create.shape)?.x).toBe(40);
+  });
+
+  test("a board leaves memory when its last member does, and comes back from disk", async () => {
+    const { app, port } = await start();
+    const { c: a } = await Client.join(port, "board01", "a");
+    a.send({ type: "ops", ops: [edits("a").create] });
+    await a.next("ack");
+    a.ws.close();
+    await a.closed;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(app.rooms.size).toBe(0);
+    const { welcome } = await Client.join(port, "board01", "b");
+    expect(welcome.snapshot).toHaveLength(1);
+  });
+
+  test("the board limit counts the boards stored, not only those in memory", async () => {
+    const { port } = await start({ limits: { maxBoards: 1 } });
+    const { c: a } = await Client.join(port, "board01", "a");
+    a.ws.close();
+    await a.closed;
+    const c = await Client.connect(port);
+    c.send({ type: "hello", protocol: PROTOCOL_VERSION, board: "board02", client: "b" });
+    expect(await c.next("error")).toMatchObject({ code: "board_limit" });
+  });
+
+  test("a failing store: the edit is refused, never acknowledged, and health says so", async () => {
+    const { app, port } = await start();
+    const { c: a } = await Client.join(port, "board01", "a");
+    const { c: b } = await Client.join(port, "board01", "b");
+    app.rooms.store.save = () => {
+      throw new StorageError("disk full");
+    };
+    a.send({ type: "ops", ops: [edits("a").create] });
+    expect((await a.closed).code).toBe(CloseCode.StorageFailed);
+    expect(a.inbox).toMatchObject([{ type: "error", code: "storage_failed" }]);
+    expect(await b.drain("ops")).toEqual([]); // nothing unstored relayed
+    const health = await fetch(`http://127.0.0.1:${String(port)}/healthz`);
+    expect(health.status).toBe(503);
+    expect(await health.json()).toMatchObject({ status: "storage failed", error: expect.stringContaining("disk full") as unknown });
+    b.send({ type: "ops", ops: [edits("b").create] }); // and nobody else's edits either
+    expect((await b.closed).code).toBe(CloseCode.StorageFailed);
+  });
+});
+
 describe("uploading a board", () => {
   test("what was new is relayed, the uploader's own edits acknowledged; again, nothing", async () => {
     const { app, port } = await start();
@@ -255,7 +326,7 @@ describe("refusals", () => {
     const app = await refusedWith((c) => {
       c.send({ type: "ops", ops: [edits("a").create, edits("b").create] });
     }, "not_yours", CloseCode.BadOperation);
-    expect(app.rooms.peek("board01")?.replica.state.size).toBe(0);
+    expect(app.rooms.store.load("board01")?.state.size).toBe(0); // nothing stored
   });
 
   test("a counter above 2^52", async () => {

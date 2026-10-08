@@ -62,6 +62,7 @@ class World {
         host: "127.0.0.1",
         port: 0,
         clientDir: this.clientDir,
+        dataDir: path.join(this.clientDir, "data"),
         shutdownGraceMs: 200,
         heartbeatMs: 30_000,
         limits: DEFAULT_LIMITS,
@@ -71,9 +72,16 @@ class World {
     return this.app.listen();
   }
 
-  /** The server goes away and comes back empty: no persistence until Milestone 5. */
-  async restart(): Promise<void> {
+  /**
+   * The server goes away and comes back with its boards on disk; or, with
+   * `wipe`, with its data lost (a volume deleted), so the browsers'
+   * uploads must bring the board back.
+   */
+  async restart(wipe = false): Promise<void> {
     await this.app.close();
+    if (wipe) {
+      await rm(path.join(this.clientDir, "data"), { recursive: true, force: true });
+    }
     const port = await this.#start();
     for (const client of this.clients) {
       client.link.retarget(port);
@@ -187,14 +195,26 @@ describe("two clients, a real server", () => {
     expect(shape).toMatchObject({ x: 200, stroke: "red" });
   });
 
-  test("the server restarts empty; the clients' uploads bring the board back", async () => {
+  test("the server restarts with the board on disk, before anyone is back", async () => {
     const w = await world(2);
     for (let i = 0; i < 20; i++) {
       at(w, i % 2).editor.create({ kind: "ellipse", x: i * 10, y: 0, w: 5, h: 5 });
     }
     const before = await w.settle();
     await w.restart();
-    expect(w.serverState()).toBe("[]");
+    const stored = w.app.rooms.store.load(BOARD);
+    expect(serializeState(stored?.state ?? new Map())).toBe(before);
+    expect(await w.settle()).toBe(before);
+  });
+
+  test("the server's data is lost; the clients' uploads bring the board back", async () => {
+    const w = await world(2);
+    for (let i = 0; i < 20; i++) {
+      at(w, i % 2).editor.create({ kind: "ellipse", x: i * 10, y: 0, w: 5, h: 5 });
+    }
+    const before = await w.settle();
+    await w.restart(true);
+    expect(w.app.rooms.store.load(BOARD)).toBeNull();
     expect(await w.settle()).toBe(before);
   });
 });
@@ -241,7 +261,8 @@ type Step =
   | { do: "delete" | "undo" | "redo"; who: number; pick: number }
   | { do: "cut" | "block" | "heal"; who: number }
   | { do: "wait"; ms: number }
-  | { do: "restart" };
+  | { do: "restart" }
+  | { do: "wipe" };
 
 const who = fc.integer({ min: 0, max: 2 });
 const step: fc.Arbitrary<Step> = fc.oneof(
@@ -251,10 +272,10 @@ const step: fc.Arbitrary<Step> = fc.oneof(
   { weight: 2, arbitrary: fc.record({ do: fc.constantFrom("delete" as const, "undo" as const, "redo" as const), who, pick: fc.nat() }) },
   { weight: 3, arbitrary: fc.record({ do: fc.constantFrom("cut" as const, "block" as const, "heal" as const), who }) },
   { weight: 3, arbitrary: fc.record({ do: fc.constant("wait" as const), ms: fc.integer({ min: 0, max: 25 }) }) },
-  { weight: 1, arbitrary: fc.constant({ do: "restart" as const }) },
+  { weight: 1, arbitrary: fc.constantFrom({ do: "restart" as const }, { do: "wipe" as const }) },
 );
 
-test("random edits on three clients, a network that keeps failing, server restarts: everyone agrees in the end", async () => {
+test("random edits on three clients, a network that keeps failing, server restarts (some losing their data): everyone agrees in the end", async () => {
   await fc.assert(
     fc.asyncProperty(fc.array(step, { minLength: 10, maxLength: 40 }), async (steps) => {
       const w = await within("starting", 10_000, World.create(3));
@@ -264,8 +285,8 @@ test("random edits on three clients, a network that keeps failing, server restar
             await pause(s.ms);
             continue;
           }
-          if (s.do === "restart") {
-            await within("a server restart", 10_000, w.restart());
+          if (s.do === "restart" || s.do === "wipe") {
+            await within("a server restart", 10_000, w.restart(s.do === "wipe"));
             continue;
           }
           const client = at(w, s.who);
