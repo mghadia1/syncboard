@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // Vite bundles; tsc only checks.
+    "noEmit": true,
+    "tsBuildInfoFile": "../node_modules/.tmp/client.tsbuildinfo",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "types": ["vite/client", "node"]
+  },
+  "include": ["src", "vite.config.ts"],
+  "references": [{ "path": "../shared/tsconfig.build.json" }]
+}

@@ -1,0 +1,10 @@
+{
+  // `tsc -b` type-checks every package in dependency order: shared first,
+  // because the server and the client use its compiled declarations.
+  "files": [],
+  "references": [
+    { "path": "./shared" },
+    { "path": "./server" },
+    { "path": "./client" }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "@syncboard/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The SyncBoard server: HTTP, the WebSocket endpoint, and the built client.",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -b tsconfig.build.json",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@syncboard/shared": "0.1.0",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15"
+  }
+}

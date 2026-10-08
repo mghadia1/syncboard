@@ -1,0 +1,109 @@
+/* A placeholder shell: the board's real look is designed with drawing, in
+   Milestone 2. Colors are tokens so dark mode is a second set of values. */
+:root {
+  --surface: #ffffff;
+  --board: #f4f6f8;
+  --grid: #cfd6de;
+  --ink: #1b2129;
+  --ink-muted: #5b6672;
+  --line: #dde2e8;
+  --ok: #1f7a4d;
+  --waiting: #8a6100;
+  --bad: #b3261e;
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #161a1f;
+    --board: #1d2228;
+    --grid: #343c46;
+    --ink: #e6eaef;
+    --ink-muted: #9aa5b1;
+    --line: #2c333b;
+    --ok: #5cc48e;
+    --waiting: #e0b54a;
+    --bad: #f08a80;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--surface);
+}
+
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 100dvh;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.wordmark {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.badge::before {
+  content: "";
+  align-self: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.badge-ok {
+  color: var(--ok);
+}
+
+.badge-waiting {
+  color: var(--waiting);
+}
+
+.badge-bad {
+  color: var(--bad);
+}
+
+.badge-detail {
+  color: var(--ink-muted);
+  font-weight: 400;
+}
+
+.board {
+  display: grid;
+  place-items: center;
+  background-color: var(--board);
+  background-image: radial-gradient(var(--grid) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.empty {
+  margin: 0;
+  color: var(--ink-muted);
+}

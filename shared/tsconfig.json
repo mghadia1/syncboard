@@ -1,0 +1,10 @@
+{
+  // Type-checks everything, tests included; tsconfig.build.json emits dist/.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "tsBuildInfoFile": "../node_modules/.tmp/shared.tsbuildinfo",
+    "types": []
+  },
+  "include": ["src"]
+}

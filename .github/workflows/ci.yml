@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: lint (ESLint, type-aware)
+        run: npm run lint
+
+      - name: typecheck (tsc -b, tests included)
+        run: npm run typecheck
+
+      - name: test (Vitest)
+        run: npm test
+
+      - name: build
+        run: npm run build
+
+  compose:
+    # The job above tests the code in-process; this builds the image the way
+    # a user runs it (client built inside it, non-root, health-checked) and
+    # checks it from outside over HTTP and WebSockets, including a clean stop.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # For the smoke test's WebSocket checks (Node's built-in client).
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: compose up
+        run: docker compose up --build --detach --wait
+
+      - name: smoke test over HTTP and WebSockets
+        run: ./scripts/smoke.sh
+
+      - name: logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: compose down
+        if: always()
+        run: docker compose down
