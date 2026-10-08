@@ -3,6 +3,7 @@ import {
   type ClientMessage,
   type Operation,
   PROTOCOL_VERSION,
+  type Presence,
   chunkSnapshot,
   fromSnapshot,
   parseServerMessage,
@@ -31,6 +32,10 @@ import type { Editor } from "../board/editor";
  * - Some refusals are final (another protocol version, an operation the
  *   server will never take): retrying would loop, so the engine stops and
  *   says why.
+ * - Presence (who this is, where its pointer is, what it has selected) is
+ *   sent at most every PRESENCE_MS, the latest winning, and again after
+ *   every welcome; others' presence is kept by client id until they leave.
+ *   Offline, the engine cannot know who is there, so it forgets them.
  */
 
 export type CreateSocket = (url: string) => WebSocket;
@@ -51,7 +56,12 @@ export type SyncOptions = {
   /** How long to gather operations into one frame (a drag makes one per pointer move). */
   flushMs?: number;
   random?: () => number;
+  /** Who this is; cursor and selection follow with setPresence. */
+  presence?: Presence;
 };
+
+/** At most one presence message this often: a pointer moves 60 to 120 times a second. */
+export const PRESENCE_MS = 40;
 
 /** About this much JSON per frame: well under the server's 1 MiB limit. */
 const FRAME_BYTES = 256 * 1024;
@@ -87,6 +97,11 @@ export class Sync {
   #flushTimer: ReturnType<typeof setTimeout> | null = null;
   #stopListening: (() => void) | null = null;
   #status: SyncStatus = { state: "connecting", pending: 0 };
+  #presence: Presence | null;
+  #presenceTimer: ReturnType<typeof setTimeout> | null = null;
+  #presenceSentAt = -Infinity;
+  #presenceDirty = false;
+  #peers: ReadonlyMap<string, Presence> = new Map();
   readonly #listeners = new Set<() => void>();
 
   constructor(options: SyncOptions) {
@@ -97,6 +112,7 @@ export class Sync {
     this.#retry = options.retry ?? { firstMs: 500, maxMs: 10_000 };
     this.#flushMs = options.flushMs ?? 16;
     this.#random = options.random ?? Math.random;
+    this.#presence = options.presence ?? null;
   }
 
   // For useSyncExternalStore.
@@ -106,6 +122,19 @@ export class Sync {
   };
 
   getStatus = (): SyncStatus => this.#status;
+
+  /** Everyone else on the board, by client id. */
+  getPeers = (): ReadonlyMap<string, Presence> => this.#peers;
+
+  /** Changes this browser's presence; sent soon, at most every PRESENCE_MS. */
+  setPresence(change: Partial<Presence>): void {
+    if (!this.#presence) {
+      return;
+    }
+    this.#presence = { ...this.#presence, ...change };
+    this.#presenceDirty = true;
+    this.#sendPresenceSoon();
+  }
 
   /** Operations not yet acknowledged by the server. */
   get pending(): readonly Operation[] {
@@ -128,13 +157,14 @@ export class Sync {
   stop(): void {
     this.#stopListening?.();
     this.#stopListening = null;
-    for (const timer of [this.#retryTimer, this.#flushTimer]) {
+    for (const timer of [this.#retryTimer, this.#flushTimer, this.#presenceTimer]) {
       if (timer !== null) {
         clearTimeout(timer);
       }
     }
     this.#retryTimer = null;
     this.#flushTimer = null;
+    this.#presenceTimer = null;
     const socket = this.#socket;
     this.#socket = null;
     if (socket) {
@@ -202,7 +232,22 @@ export class Sync {
         }
         this.#epoch = message.epoch;
         this.#flush();
+        this.#setPeers(new Map(message.peers.map((peer) => [peer.client, peer.presence])));
+        this.#presenceDirty = true;
+        this.#sendPresenceSoon();
         this.#refresh();
+        return;
+      }
+      case "presence": {
+        const peers = new Map(this.#peers);
+        peers.set(message.client, message.presence);
+        this.#setPeers(peers);
+        return;
+      }
+      case "left": {
+        const peers = new Map(this.#peers);
+        peers.delete(message.client);
+        this.#setPeers(peers);
         return;
       }
       case "ops":
@@ -227,6 +272,9 @@ export class Sync {
   #closed(code: number): void {
     this.#socket = null;
     this.#welcomed = false;
+    if (this.#peers.size > 0) {
+      this.#setPeers(new Map());
+    }
     if (this.#flushTimer !== null) {
       clearTimeout(this.#flushTimer);
       this.#flushTimer = null;
@@ -280,6 +328,30 @@ export class Sync {
       }
       this.#send(socket, { type: "ops", ops: batch });
       this.#sent += batch.length;
+    }
+  }
+
+  #sendPresenceSoon(): void {
+    if (this.#presenceTimer !== null || !this.#welcomed) {
+      return; // already due; or sent after the next welcome
+    }
+    const wait = Math.max(0, this.#presenceSentAt + PRESENCE_MS - Date.now());
+    this.#presenceTimer = setTimeout(() => {
+      this.#presenceTimer = null;
+      const socket = this.#socket;
+      if (!this.#presenceDirty || !this.#presence || !socket || !this.#welcomed) {
+        return;
+      }
+      this.#send(socket, { type: "presence", presence: this.#presence });
+      this.#presenceDirty = false;
+      this.#presenceSentAt = Date.now();
+    }, wait);
+  }
+
+  #setPeers(peers: ReadonlyMap<string, Presence>): void {
+    this.#peers = peers;
+    for (const listener of this.#listeners) {
+      listener();
     }
   }
 

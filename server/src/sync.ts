@@ -10,13 +10,15 @@ import {
 } from "@syncboard/shared";
 import type { RawData, WebSocket } from "ws";
 import type { Log } from "./log.js";
-import { type Peer, type Refusal, type Room, type Rooms, entriesAsOperations } from "./rooms.js";
+import { type Member, type Refusal, type Room, type Rooms, entriesAsOperations } from "./rooms.js";
 import { VERSION } from "./version.js";
 
 /**
  * One connection, from hello to close: join a room, take the replica's
  * operations (checked, applied, relayed to the room, acknowledged), take
- * an uploaded state the same way, and leave the room on close.
+ * an uploaded state the same way, pass presence on, and leave the room on
+ * close (telling the others, unless the client is still there on another
+ * connection).
  */
 
 function text(data: RawData): string {
@@ -39,7 +41,7 @@ const CLOSE_FOR: Record<Refusal["code"], number> = {
 };
 
 export function handleConnection(ws: WebSocket, rooms: Rooms, log: Log): void {
-  let joined: { room: Room; peer: Peer } | null = null;
+  let joined: { room: Room; member: Member } | null = null;
 
   function send(message: ServerMessage): void {
     if (ws.readyState === ws.OPEN) {
@@ -70,10 +72,10 @@ export function handleConnection(ws: WebSocket, rooms: Rooms, log: Log): void {
       refuse({ code: "board_limit", message: `this server holds at most ${String(rooms.limits.maxBoards)} boards` });
       return;
     }
-    const peer: Peer = { client: message.client, send };
-    room.peers.add(peer);
-    joined = { room, peer };
-    log("joined", { board: room.board, client: message.client, peers: room.peers.size });
+    const member: Member = { client: message.client, send, presence: null };
+    room.members.add(member);
+    joined = { room, member };
+    log("joined", { board: room.board, client: message.client, members: room.members.size });
     // The snapshot and joining happen in one turn of the event loop: no
     // operation can fall between what the snapshot holds and what is relayed.
     send({
@@ -83,6 +85,7 @@ export function handleConnection(ws: WebSocket, rooms: Rooms, log: Log): void {
       board: room.board,
       epoch: room.epoch,
       snapshot: toSnapshot(room.replica.state),
+      peers: room.peersFor(member),
     });
   }
 
@@ -120,18 +123,23 @@ export function handleConnection(ws: WebSocket, rooms: Rooms, log: Log): void {
       refuse({ code: "not_joined", message: "say hello first" });
       return;
     }
-    const { room, peer } = joined;
+    const { room, member } = joined;
+    if (message.type === "presence") {
+      member.presence = message.presence;
+      room.relay({ type: "presence", client: member.client, presence: message.presence }, member);
+      return;
+    }
     if (message.type === "ops") {
-      const refusal = room.check(message.ops, peer.client);
+      const refusal = room.check(message.ops, member.client);
       if (refusal) {
         refuse(refusal);
         return;
       }
       const changed = room.apply(message.ops);
       if (changed.length > 0) {
-        room.relay({ type: "ops", ops: changed }, peer);
+        room.relay({ type: "ops", ops: changed }, member);
       }
-      acknowledge(message.ops, peer.client);
+      acknowledge(message.ops, member.client);
       return;
     }
     // An uploaded state: the server's copy of the board was new to this
@@ -145,15 +153,18 @@ export function handleConnection(ws: WebSocket, rooms: Rooms, log: Log): void {
     }
     const changed = room.absorb(state);
     for (let i = 0; i < changed.length; i += 500) {
-      room.relay({ type: "ops", ops: changed.slice(i, i + 500) }, peer);
+      room.relay({ type: "ops", ops: changed.slice(i, i + 500) }, member);
     }
-    acknowledge(entries, peer.client);
+    acknowledge(entries, member.client);
   });
 
   ws.on("close", () => {
     if (joined) {
-      joined.room.peers.delete(joined.peer);
-      log("left", { board: joined.room.board, client: joined.peer.client, peers: joined.room.peers.size });
+      const { room, member } = joined;
+      if (room.leave(member)) {
+        room.relay({ type: "left", client: member.client }, member);
+      }
+      log("left", { board: room.board, client: member.client, members: room.members.size });
     }
   });
 }

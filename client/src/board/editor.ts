@@ -3,10 +3,14 @@ import {
   MAX_COORDINATE,
   type NewShape,
   type Operation,
+  PROP_NAMES,
+  type PropName,
   Replica,
   type Shape,
   type ShapeId,
   type ShapeProps,
+  type Stamp,
+  compareStamps,
   keyAfter,
   keyBefore,
 } from "@syncboard/shared";
@@ -15,17 +19,29 @@ import { clamp, round } from "./geometry";
 /**
  * The board as the page edits it: a replica, plus undo and redo.
  *
- * Every change is an operation on the replica (which will be sent to
- * other browsers in Milestone 3). Undo does not rewind anything: it makes
- * new operations that set the changed properties back to the values they
- * had, so it is an edit like any other and works the same with other
- * people's edits arriving in between. A gesture (a drag, a resize) is
- * grouped between begin() and commit() into one undo step, however many
- * operations it made on the way.
+ * Every change is an operation on the replica, sent to everyone on the
+ * board. Undo does not rewind anything: it makes new operations that set
+ * the changed properties back to the values they had, so it is an edit
+ * like any other. A gesture (a drag, a resize) is grouped between begin()
+ * and commit() into one undo step, however many operations it made.
+ *
+ * Undo and redo revert only this person's changes. For each property a
+ * step changed, the editor remembers the stamp of the edit that last wrote
+ * it here; for each property on the board, the newest edit by anyone else.
+ * A property someone else has written since this step wrote it is left
+ * as it is. Asking "is the current value still mine?" is not enough: move
+ * a shape, someone else moves it, move it again, and undo twice: the
+ * second undo would find a value of its own (the first undo's) and wipe
+ * the other person's move.
  */
 
-type Change = { readonly shape: ShapeId; readonly set: Partial<ShapeProps> };
-type Step = { readonly label: string; readonly undo: readonly Change[]; readonly redo: readonly Change[] };
+/** One property a step changed: before it, after it, and the stamp of the edit that last wrote it. */
+type Change = { readonly before: unknown; after: unknown; stamp: Stamp };
+type Changes = Map<ShapeId, Map<PropName, Change>>;
+type Step = { readonly label: string; readonly changes: Changes };
+
+/** What an undo or redo did: how many properties it reverted, how many it left to others. */
+export type Outcome = { readonly label: string; readonly reverted: number; readonly kept: number };
 
 export type Snapshot = {
   readonly shapes: readonly Shape[];
@@ -34,7 +50,9 @@ export type Snapshot = {
   readonly redoLabel: string | null;
 };
 
-type Open = { label: string; before: Map<ShapeId, Partial<ShapeProps>> };
+type Open = { label: string; changes: Changes };
+
+const key = (shape: ShapeId, name: PropName) => `${shape}\u0000${name}`;
 
 function clampCoordinates(props: Partial<ShapeProps>): Partial<ShapeProps> {
   const out: Partial<ShapeProps> = { ...props };
@@ -54,6 +72,8 @@ export class Editor {
   #open: Open | null = null;
   #listeners = new Set<() => void>();
   #operationListeners = new Set<(op: Operation) => void>();
+  /** For each property, the newest stamp of an edit by anyone else. */
+  #foreign = new Map<string, Stamp>();
   #snapshot: Snapshot;
 
   constructor(replica: Replica = new Replica()) {
@@ -80,23 +100,17 @@ export class Editor {
     if (this.#open) {
       throw new Error(`"${this.#open.label}" is still open`);
     }
-    this.#open = { label, before: new Map() };
+    this.#open = { label, changes: new Map() };
   }
 
   /** Ends the group; a group that changed nothing leaves no undo step. */
   commit(): void {
     const open = this.#open;
     this.#open = null;
-    if (!open || open.before.size === 0) {
+    if (!open || open.changes.size === 0) {
       return;
     }
-    const undo: Change[] = [];
-    const redo: Change[] = [];
-    for (const [shape, before] of open.before) {
-      undo.push({ shape, set: before });
-      redo.push({ shape, set: this.replica.values(shape, Object.keys(before) as (keyof ShapeProps)[]) });
-    }
-    this.#undo.push({ label: open.label, undo, redo });
+    this.#undo.push({ label: open.label, changes: open.changes });
     this.#redo = [];
     this.#changed();
   }
@@ -105,15 +119,10 @@ export class Editor {
   cancel(): void {
     const open = this.#open;
     this.#open = null;
-    if (!open) {
-      return;
+    if (open) {
+      this.#revert(open.changes, "before");
+      this.#changed();
     }
-    for (const [shape, before] of open.before) {
-      if (Object.keys(before).length > 0) {
-        this.#send(this.replica.set(shape, before));
-      }
-    }
-    this.#changed();
   }
 
   get inGesture(): boolean {
@@ -127,6 +136,9 @@ export class Editor {
   applyRemote(ops: readonly Operation[]): void {
     let changed = false;
     for (const op of ops) {
+      for (const name of Object.keys(op.set) as PropName[]) {
+        this.#noteForeign(op.shape, name, op.stamp);
+      }
       changed = this.replica.apply(op) || changed;
     }
     if (changed) {
@@ -136,6 +148,14 @@ export class Editor {
 
   /** A whole board from the network (the server's snapshot), merged in. */
   mergeRemote(state: BoardState): void {
+    for (const [shape, entries] of state) {
+      for (const name of PROP_NAMES) {
+        const entry = entries[name];
+        if (entry) {
+          this.#noteForeign(shape, name, entry.stamp);
+        }
+      }
+    }
     if (this.replica.merge(state)) {
       this.#changed();
     }
@@ -145,7 +165,7 @@ export class Editor {
     return this.#within(label, () => {
       const op = this.replica.create(clampCoordinates(shape) as NewShape);
       // Before it existed, a shape is as good as deleted: undo deletes it.
-      this.#remember(op.shape, { deleted: true });
+      this.#record(op, { deleted: true });
       this.#send(op);
       return op.shape;
     });
@@ -206,29 +226,80 @@ export class Editor {
     });
   }
 
-  undo(): void {
-    this.#travel(this.#undo, this.#redo, "undo");
+  /** Undoes this person's last step, except what others have changed since; null if nothing. */
+  undo(): Outcome | null {
+    return this.#travel(this.#undo, this.#redo, "before");
   }
 
-  redo(): void {
-    this.#travel(this.#redo, this.#undo, "redo");
+  redo(): Outcome | null {
+    return this.#travel(this.#redo, this.#undo, "after");
   }
 
-  #travel(from: Step[], to: Step[], direction: "undo" | "redo"): void {
+  #travel(from: Step[], to: Step[], side: "before" | "after"): Outcome | null {
     if (this.#open) {
-      return; // not in the middle of a gesture
+      return null; // not in the middle of a gesture
     }
     const step = from.pop();
     if (!step) {
-      return;
+      return null;
     }
-    for (const change of step[direction]) {
-      if (Object.keys(change.set).length > 0) {
-        this.#send(this.replica.set(change.shape, change.set));
-      }
-    }
+    const { reverted, kept } = this.#revert(step.changes, side);
     to.push(step);
     this.#changed();
+    return { label: step.label, reverted, kept };
+  }
+
+  /**
+   * Sets each changed property to its value before (or after) the step,
+   * as a new edit, except where someone else has written it since; the
+   * step then remembers the new edit's stamp, for the next undo or redo.
+   */
+  #revert(changes: Changes, side: "before" | "after"): { reverted: number; kept: number } {
+    let reverted = 0;
+    let kept = 0;
+    for (const [shape, props] of changes) {
+      const set: Partial<Record<PropName, unknown>> = {};
+      for (const [name, change] of props) {
+        const value = change[side];
+        if (value === undefined) {
+          continue; // unknown before the step: nothing to put back
+        }
+        if (this.#othersSince(shape, name, change.stamp)) {
+          kept++;
+          continue;
+        }
+        set[name] = value;
+      }
+      const names = Object.keys(set) as PropName[];
+      if (names.length > 0) {
+        // Each value was recorded from its own property.
+        const op = this.replica.set(shape, set as Partial<ShapeProps>);
+        for (const name of names) {
+          const change = props.get(name);
+          if (change) {
+            change.stamp = op.stamp;
+          }
+        }
+        reverted += names.length;
+        this.#send(op);
+      }
+    }
+    return { reverted, kept };
+  }
+
+  #othersSince(shape: ShapeId, name: PropName, stamp: Stamp): boolean {
+    const foreign = this.#foreign.get(key(shape, name));
+    return foreign !== undefined && compareStamps(foreign, stamp) > 0;
+  }
+
+  #noteForeign(shape: ShapeId, name: PropName, stamp: Stamp): void {
+    if (stamp.client === this.replica.client) {
+      return;
+    }
+    const current = this.#foreign.get(key(shape, name));
+    if (!current || compareStamps(stamp, current) > 0) {
+      this.#foreign.set(key(shape, name), stamp);
+    }
   }
 
   /** Runs `body` inside the open group, or as a group of its own. */
@@ -248,17 +319,35 @@ export class Editor {
   }
 
   #set(id: ShapeId, props: Partial<ShapeProps>): void {
-    this.#remember(id, this.replica.values(id, Object.keys(props) as (keyof ShapeProps)[]));
-    this.#send(this.replica.set(id, props));
+    const before = this.replica.values(id, Object.keys(props) as PropName[]);
+    const op = this.replica.set(id, props);
+    this.#record(op, before);
+    this.#send(op);
   }
 
-  /** Records a shape's values before the group first changed them. */
-  #remember(id: ShapeId, values: Partial<ShapeProps>): void {
+  /**
+   * Records an edit in the open group: for each property, the value before
+   * the group first changed it (the earliest wins), the value now, and
+   * this edit's stamp.
+   */
+  #record(op: Operation, before: Partial<ShapeProps>): void {
     if (!this.#open) {
       return;
     }
-    const before = this.#open.before.get(id) ?? {};
-    this.#open.before.set(id, { ...values, ...before }); // the earliest value wins
+    let props = this.#open.changes.get(op.shape);
+    if (!props) {
+      props = new Map();
+      this.#open.changes.set(op.shape, props);
+    }
+    for (const name of Object.keys(op.set) as PropName[]) {
+      const change = props.get(name);
+      if (change) {
+        change.after = op.set[name];
+        change.stamp = op.stamp;
+      } else {
+        props.set(name, { before: before[name], after: op.set[name], stamp: op.stamp });
+      }
+    }
   }
 
   #send(op: Operation): void {

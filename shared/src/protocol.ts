@@ -10,18 +10,21 @@
  *
  *   browser                                   server
  *   hello {board, client}           ───►
- *                                   ◄───      welcome {epoch, snapshot}
+ *                                   ◄───      welcome {epoch, snapshot, peers}
  *   state {snapshot}  (if the epoch is new)   ───►
  *   ops [...]  (its own edits)      ───►      relayed as ops to the others
  *                                   ◄───      ack {upTo}
  *                                   ◄───      ops [...] (the others' edits)
+ *   presence {...}                  ───►      relayed as presence {client, ...}
+ *                                   ◄───      left {client}
  */
 import { type Operation, parseOperation } from "./board/operation.js";
 import { type Snapshot, parseSnapshot } from "./board/snapshot.js";
 import { isBoardId, isClientId } from "./board/stamp.js";
+import { type Presence, parsePresence } from "./presence.js";
 
 /** Raised whenever a message's meaning changes; a mismatch is refused. */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** The largest frame the server accepts, in bytes. */
 export const MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -35,7 +38,9 @@ export type ClientMessage =
   /** Edits made by this replica, in the order it made them. */
   | { type: "ops"; ops: readonly Operation[] }
   /** (Part of) everything this replica knows: sent when the server's board is new to it. */
-  | { type: "state"; snapshot: Snapshot };
+  | { type: "state"; snapshot: Snapshot }
+  /** Who this is and what they are doing; replaces the last one. */
+  | { type: "presence"; presence: Presence };
 
 export type ErrorCode =
   | "bad_message"
@@ -45,17 +50,33 @@ export type ErrorCode =
   | "not_yours"
   | "board_limit";
 
+/** Someone on the board, as presence tells it. */
+export type Peer = { readonly client: string; readonly presence: Presence };
+
 export type ServerMessage =
   /**
    * Joined. `epoch` names this copy of the board on the server: if a
    * replica saw a different one before, the server has lost what it knew
    * (a restart), and the replica uploads its state.
    */
-  | { type: "welcome"; protocol: number; version: string; board: string; epoch: string; snapshot: Snapshot }
+  | {
+      type: "welcome";
+      protocol: number;
+      version: string;
+      board: string;
+      epoch: string;
+      snapshot: Snapshot;
+      /** Everyone else on the board who has said who they are. */
+      peers: readonly Peer[];
+    }
   /** Other replicas' edits. */
   | { type: "ops"; ops: readonly Operation[] }
   /** Every edit of yours with a counter up to this one has been applied. */
   | { type: "ack"; upTo: number }
+  /** Someone's presence, new or changed. */
+  | { type: "presence"; client: string; presence: Presence }
+  /** Someone has left the board. */
+  | { type: "left"; client: string }
   | { type: "error"; code: ErrorCode; message: string };
 
 /** WebSocket close codes this protocol uses (4000-4999 are for applications). */
@@ -157,9 +178,29 @@ export function parseClientMessage(text: string): Parsed<ClientMessage> {
       const snapshot = parseSnapshot(fields.snapshot);
       return snapshot.ok ? { ok: true, message: { type: "state", snapshot: snapshot.message } } : snapshot;
     }
+    case "presence": {
+      const presence = parsePresence(fields.presence);
+      return presence.ok ? { ok: true, message: { type: "presence", presence: presence.message } } : presence;
+    }
     default:
       return { ok: false, error: `unknown message type ${JSON.stringify(fields.type)}` };
   }
+}
+
+function parsePeers(value: unknown): Parsed<Peer[]> {
+  if (!Array.isArray(value)) {
+    return { ok: false, error: "peers must be a list" };
+  }
+  const peers: Peer[] = [];
+  for (const item of value as unknown[]) {
+    const { client, presence } = (typeof item === "object" && item !== null ? item : {}) as Record<string, unknown>;
+    const parsed = parsePresence(presence);
+    if (!isClientId(client) || !parsed.ok) {
+      return { ok: false, error: "each peer needs a client id and a presence" };
+    }
+    peers.push({ client, presence: parsed.message });
+  }
+  return { ok: true, message: peers };
 }
 
 /** Checks a frame from the server. */
@@ -183,6 +224,10 @@ export function parseServerMessage(text: string): Parsed<ServerMessage> {
       if (!snapshot.ok) {
         return snapshot;
       }
+      const peers = parsePeers(fields.peers);
+      if (!peers.ok) {
+        return peers;
+      }
       return {
         ok: true,
         message: {
@@ -192,6 +237,7 @@ export function parseServerMessage(text: string): Parsed<ServerMessage> {
           board: fields.board,
           epoch: fields.epoch,
           snapshot: snapshot.message,
+          peers: peers.message,
         },
       };
     }
@@ -204,6 +250,20 @@ export function parseServerMessage(text: string): Parsed<ServerMessage> {
         return { ok: false, error: "ack needs a counter" };
       }
       return { ok: true, message: { type: "ack", upTo: fields.upTo } };
+    case "presence": {
+      const presence = parsePresence(fields.presence);
+      if (!isClientId(fields.client)) {
+        return { ok: false, error: "presence needs a client id" };
+      }
+      return presence.ok
+        ? { ok: true, message: { type: "presence", client: fields.client, presence: presence.message } }
+        : presence;
+    }
+    case "left":
+      if (!isClientId(fields.client)) {
+        return { ok: false, error: "left needs a client id" };
+      }
+      return { ok: true, message: { type: "left", client: fields.client } };
     case "error":
       if (!isErrorCode(fields.code) || typeof fields.message !== "string") {
         return { ok: false, error: "error needs a known code and a message" };

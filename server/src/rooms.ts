@@ -3,6 +3,8 @@ import {
   type ErrorCode,
   type Operation,
   PROP_NAMES,
+  type Peer,
+  type Presence,
   Replica,
   type ServerMessage,
   newBoardId,
@@ -26,8 +28,17 @@ export type Limits = {
 // Counters are bounded too, for every replica alike: see MAX_COUNTER.
 export const DEFAULT_LIMITS: Limits = { maxBoards: 1000, maxShapes: 20_000 };
 
-/** One joined connection, as a room sees it. */
-export type Peer = { readonly client: string; send(message: ServerMessage): void };
+/**
+ * One joined connection, as a room sees it. A replica can have two at
+ * once for a moment (a reconnect before the old connection is noticed
+ * gone); members are kept per connection and shown to others per client.
+ */
+export type Member = {
+  readonly client: string;
+  send(message: ServerMessage): void;
+  /** What it last said about itself; null until it says something. */
+  presence: Presence | null;
+};
 
 export type Refusal = { code: ErrorCode; message: string };
 
@@ -35,7 +46,7 @@ export class Room {
   /** Names this copy of the board: a new one after every restart (see the protocol). */
   readonly epoch = newBoardId();
   readonly replica = new Replica("server");
-  readonly peers = new Set<Peer>();
+  readonly members = new Set<Member>();
 
   constructor(
     readonly board: string,
@@ -75,13 +86,30 @@ export class Room {
     return this.replica.absorb(state);
   }
 
-  /** Sends to every peer but one. */
-  relay(message: ServerMessage, except: Peer): void {
-    for (const peer of this.peers) {
-      if (peer !== except) {
-        peer.send(message);
+  /** Sends to every member but one, and but its other connections. */
+  relay(message: ServerMessage, from: Member): void {
+    for (const member of this.members) {
+      if (member.client !== from.client) {
+        member.send(message);
       }
     }
+  }
+
+  /** Everyone on the board who has said who they are, except `to` itself. */
+  peersFor(to: Member): Peer[] {
+    const peers = new Map<string, Peer>();
+    for (const member of this.members) {
+      if (member.client !== to.client && member.presence) {
+        peers.set(member.client, { client: member.client, presence: member.presence });
+      }
+    }
+    return [...peers.values()];
+  }
+
+  /** Takes a member out; true if that was its client's last connection. */
+  leave(member: Member): boolean {
+    this.members.delete(member);
+    return ![...this.members].some((other) => other.client === member.client);
   }
 
 }

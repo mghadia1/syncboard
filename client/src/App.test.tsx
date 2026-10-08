@@ -27,7 +27,7 @@ function setup() {
 function welcome(network: FakeNetwork, epoch = "e1") {
   const socket = network.last();
   socket.open();
-  socket.receive({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.1.0", board: "board01", epoch, snapshot: [] });
+  socket.receive({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.1.0", board: "board01", epoch, snapshot: [], peers: [] });
   return socket;
 }
 
@@ -117,4 +117,38 @@ test("closing the page closes the socket", () => {
   const socket = welcome(network);
   view.unmount();
   expect(socket.closedWith).toBe(1000);
+});
+
+describe("people", () => {
+  test("you and the others on the board; renaming tells them", () => {
+    const network = new FakeNetwork((fn) => {
+      act(fn);
+    });
+    render(<App url="ws://t/ws" board="board01" create={network.create} name="Teal Otter" editor={new Editor(new Replica("me"))} />);
+    const socket = network.last();
+    socket.open();
+    socket.receive({
+      type: "welcome",
+      protocol: PROTOCOL_VERSION,
+      version: "0.1.0",
+      board: "board01",
+      epoch: "e1",
+      snapshot: [],
+      peers: [{ client: "ann", presence: { name: "Ann Lee", color: "red", cursor: null, selection: [] } }],
+    });
+    const people = screen.getByRole("group", { name: "People on this board" });
+    expect(people).toHaveTextContent("TO");
+    expect(screen.getByRole("img", { name: "Ann Lee" })).toHaveTextContent("AL");
+    expect(people).toHaveTextContent("1 others here");
+    fireEvent.click(screen.getByRole("button", { name: "You, Teal Otter: change your name" }));
+    const input = screen.getByRole<HTMLInputElement>("textbox", { name: "Your name" });
+    expect([input.selectionStart, input.selectionEnd]).toEqual([0, "Teal Otter".length]); // typing replaces it
+    fireEvent.change(input, { target: { value: "Mayank" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
+    expect(socket.sentOfType("presence").at(-1)?.presence).toMatchObject({ name: "Mayank" });
+    expect(screen.getByRole("button", { name: "You, Mayank: change your name" })).toBeInTheDocument();
+  });
 });

@@ -4,7 +4,8 @@
 # links, that no path reaches files outside the client's assets, JSON 404s
 # and 405s with Allow, the WebSocket hello and its refusals (a server that
 # survives an oversized frame), edits relayed between two clients on one
-# board, that the container runs unprivileged and healthy, and
+# board, presence passed on and leaves announced, that the container runs
+# unprivileged and healthy, and
 # that `docker compose stop` shuts it down cleanly: open clients told 1001,
 # exit code 0, well inside the grace period.
 #
@@ -62,6 +63,7 @@ expect "ws other protocol closes with" "$(ws protocol)" "4001"
 expect "ws oversized frame closes with" "$(ws oversized)" "1009"
 expect "ws still answering after that" "$(ws hello)" "welcome"
 expect "ws edits relayed, acknowledged, in a later joiner's snapshot" "$(ws relay)" "relayed"
+expect "ws presence passed on, and a leave announced" "$(ws presence)" "seen and left"
 
 expect "runs as uid" "$(docker compose exec -T syncboard id -u)" "1000"
 expect "container health" "$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q syncboard)")" "healthy"

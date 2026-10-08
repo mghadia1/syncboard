@@ -48,6 +48,7 @@ class World {
         url: `ws://127.0.0.1:${String(link.port)}/ws`,
         retry: { firstMs: 5, maxMs: 40 },
         flushMs: 2,
+        presence: { name: `Person ${String(i)}`, color: "blue", cursor: null, selection: [] },
       });
       sync.start();
       world.clients.push({ editor, sync, link });
@@ -197,6 +198,41 @@ describe("two clients, a real server", () => {
     expect(await w.settle()).toBe(before);
   });
 });
+
+describe("presence and undo, with a real server", () => {
+  test("a pointer and a name reach the other person; leaving takes them away", async () => {
+    const w = await world(2);
+    const [a, b] = [at(w, 0), at(w, 1)];
+    a.sync.setPresence({ cursor: { x: 120, y: 80 } });
+    await until(() => b.sync.getPeers().get("client0")?.cursor?.x === 120);
+    expect(b.sync.getPeers().get("client0")).toMatchObject({ name: "Person 0", cursor: { x: 120, y: 80 } });
+    a.sync.stop();
+    await until(() => !b.sync.getPeers().has("client0"));
+  });
+
+  test("an undo keeps the other person's later move", async () => {
+    const w = await world(2);
+    const [a, b] = [at(w, 0), at(w, 1)];
+    const id = a.editor.create({ kind: "rectangle", x: 0, y: 0, w: 10, h: 10 });
+    a.editor.update(id, { x: 10 }, "Move");
+    await w.settle();
+    b.editor.update(id, { x: 50 }, "Move");
+    await w.settle();
+    expect(a.editor.undo()).toEqual({ label: "Move", reverted: 0, kept: 1 });
+    await w.settle();
+    expect(b.editor.replica.shape(id)?.x).toBe(50);
+  });
+});
+
+async function until(condition: () => boolean, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) {
+      throw new Error("timed out waiting");
+    }
+    await pause(10);
+  }
+}
 
 type Step =
   | { do: "draw"; who: number; x: number; kind: (typeof SHAPE_KINDS)[number] }

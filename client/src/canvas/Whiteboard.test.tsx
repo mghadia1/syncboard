@@ -325,3 +325,75 @@ test("if someone else deletes the note being typed in, the typing ends", () => {
   key("r"); // shortcuts work again
   expect(pressed("Rectangle")).toBe("true");
 });
+
+describe("other people", () => {
+  test("their pointers are drawn with their names, where they are on the board", () => {
+    const editor = new Editor(new Replica("me"));
+    const peers = new Map([["ann", { name: "Ann", color: "red" as const, cursor: { x: 100, y: 50 }, selection: [] }]]);
+    const { container } = render(<Whiteboard editor={editor} peers={peers} />);
+    const cursor = container.querySelector("[data-peer=ann] .peer-cursor");
+    expect(cursor).toHaveTextContent("Ann");
+    expect((cursor as HTMLElement).style.transform).toBe("translate(100px, 50px)");
+  });
+
+  test("what they have selected is outlined", () => {
+    const editor = new Editor(new Replica("me"));
+    let id = "";
+    act(() => {
+      id = editor.create({ kind: "rectangle", x: 10, y: 10, w: 40, h: 40 });
+    });
+    const peers = new Map([["ann", { name: "Ann", color: "red" as const, cursor: null, selection: [id, "gone.1"] }]]);
+    const { container } = render(<Whiteboard editor={editor} peers={peers} />);
+    expect(container.querySelectorAll("[data-peer-selected]")).toHaveLength(1);
+  });
+
+  test("this person's pointer and selection are reported, on the board's coordinates", () => {
+    const editor = new Editor(new Replica("me"));
+    const changes: unknown[] = [];
+    act(() => {
+      editor.create({ kind: "rectangle", x: 0, y: 0, w: 40, h: 40 });
+    });
+    render(<Whiteboard editor={editor} onPresence={(c) => changes.push(c)} />);
+    const canvas = screen.getByRole("img", { name: /^Board with/ });
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 30, clientY: 20 });
+    expect(changes).toContainEqual({ cursor: { x: 30, y: 20 } });
+    click(canvas, { x: 10, y: 10 });
+    expect(changes).toContainEqual({ selection: ["me.1"] });
+    fireEvent.pointerLeave(canvas);
+    expect(changes.at(-1)).toEqual({ cursor: null });
+  });
+
+  test("an undo that leaves someone else's change says so, out loud and on screen", () => {
+    const { canvas, editor } = setup();
+    let id = "";
+    act(() => {
+      id = editor.create({ kind: "rectangle", x: 0, y: 0, w: 40, h: 40 });
+    });
+    drag(canvas, { x: 10, y: 10 }, { x: 60, y: 10 });
+    const other = new Replica("zz");
+    other.merge(editor.replica.state);
+    act(() => {
+      editor.applyRemote([other.update(id, { x: 200, y: 90 })]); // a drag sets x and y; so do they
+    });
+    key("z", { ctrlKey: true });
+    expect(announced()).toBe("Could not undo Move shape: someone else has changed it since");
+    expect(document.querySelector(".notice")).toHaveTextContent("Could not undo Move shape");
+  });
+});
+
+test("an undo that leaves part of a step to someone else says what it did", () => {
+  const editor = new Editor(new Replica("me"));
+  const { getByTestId } = render(<Whiteboard editor={editor} />);
+  let id = "";
+  act(() => {
+    id = editor.create({ kind: "rectangle", x: 0, y: 0, w: 40, h: 40 });
+    editor.update(id, { x: 5, stroke: "red" }, "Edit");
+  });
+  const other = new Replica("zz");
+  other.merge(editor.replica.state);
+  act(() => {
+    editor.applyRemote([other.update(id, { x: 200 })]);
+  });
+  fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+  expect(getByTestId("announcer")).toHaveTextContent("Undid Edit, except what someone else has changed since");
+});

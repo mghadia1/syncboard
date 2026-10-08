@@ -30,7 +30,7 @@ function setup(options: { random?: () => number } = {}) {
 }
 
 function welcome(socket: FakeSocket, epoch = "e1", snapshot: unknown = []) {
-  socket.receive({ type: "welcome", protocol: PROTOCOL_VERSION, version: "9.9.9", board: "board01", epoch, snapshot });
+  socket.receive({ type: "welcome", protocol: PROTOCOL_VERSION, version: "9.9.9", board: "board01", epoch, snapshot, peers: [] });
 }
 
 function connect(network: FakeNetwork, epoch = "e1", snapshot: unknown = []) {
@@ -234,7 +234,7 @@ describe("refusals are final", () => {
     const { network, sync } = setup();
     const socket = network.last();
     socket.open();
-    socket.receive({ type: "welcome", protocol: PROTOCOL_VERSION, version: "1", board: "board99", epoch: "e", snapshot: [] });
+    socket.receive({ type: "welcome", protocol: PROTOCOL_VERSION, version: "1", board: "board99", epoch: "e", snapshot: [], peers: [] });
     expect(sync.getStatus()).toMatchObject({ state: "refused", reason: "joined board99, not board01" });
   });
 });
@@ -250,4 +250,76 @@ test("stop closes the socket and stops listening; start again picks up", () => {
   expect(network.sockets).toHaveLength(1);
   sync.start();
   expect(network.sockets).toHaveLength(2);
+});
+
+describe("presence", () => {
+  const me = { name: "Teal Otter", color: "blue", cursor: null, selection: [] } as const;
+
+  function withPresence() {
+    const network = new FakeNetwork();
+    const editor = new Editor(new Replica("me"));
+    const sync = new Sync({
+      editor,
+      board: "board01",
+      url: "ws://test/ws",
+      createSocket: network.create,
+      retry: { firstMs: 100, maxMs: 1000 },
+      random: () => 1,
+      presence: me,
+    });
+    sync.start();
+    return { network, sync };
+  }
+
+  test("is sent after the welcome, then at most every 40 ms, the latest winning", () => {
+    const { network, sync } = withPresence();
+    sync.setPresence({ cursor: { x: 1, y: 1 } }); // before the welcome: waits for it
+    const socket = connect(network);
+    vi.advanceTimersByTime(0);
+    expect(socket.sentOfType("presence").map((m) => m.presence)).toEqual([{ ...me, cursor: { x: 1, y: 1 } }]);
+    for (let x = 2; x <= 5; x++) {
+      sync.setPresence({ cursor: { x, y: 1 } });
+    }
+    vi.advanceTimersByTime(39);
+    expect(socket.sentOfType("presence")).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(socket.sentOfType("presence").map((m) => m.presence)).toEqual([
+      { ...me, cursor: { x: 1, y: 1 } },
+      { ...me, cursor: { x: 5, y: 1 } },
+    ]);
+  });
+
+  test("others come from the welcome, presence and left; offline, they are forgotten", () => {
+    const { network, sync } = withPresence();
+    const socket = network.last();
+    socket.open();
+    const ann = { name: "Ann", color: "red", cursor: null, selection: [] };
+    socket.receive({
+      type: "welcome",
+      protocol: PROTOCOL_VERSION,
+      version: "1",
+      board: "board01",
+      epoch: "e",
+      snapshot: [],
+      peers: [{ client: "ann", presence: ann }],
+    });
+    expect([...sync.getPeers()]).toEqual([["ann", ann]]);
+    socket.receive({ type: "presence", client: "bo", presence: { ...ann, name: "Bo" } });
+    expect([...sync.getPeers().keys()]).toEqual(["ann", "bo"]);
+    socket.receive({ type: "left", client: "ann" });
+    expect([...sync.getPeers().keys()]).toEqual(["bo"]);
+    socket.drop();
+    expect(sync.getPeers().size).toBe(0);
+  });
+
+  test("a reconnect sends presence again, even unchanged", () => {
+    const { network } = withPresence();
+    connect(network);
+    vi.advanceTimersByTime(0);
+    network.last().drop();
+    vi.advanceTimersByTime(100);
+    const second = connect(network);
+    vi.advanceTimersByTime(40);
+    expect(second.sentOfType("presence")).toHaveLength(1);
+  });
 });

@@ -7,13 +7,15 @@
 //   relay        two clients on one board: one's edit reaches the other,
 //                and is acknowledged; a third, joining later, gets it in
 //                the welcome's snapshot
+//   presence     one client's pointer and name reach another; closing
+//                sends "left"
 //   wait-close   say hello, print "ready", then print the close code when
 //                the server closes the connection (for the shutdown check)
 //
 // Prints what it saw; exits 1 if it was not what the check expects.
 
 const [url, check] = process.argv.slice(2);
-const PROTOCOL = 2;
+const PROTOCOL = 3;
 const BOARD = `smoke${Date.now().toString(36)}`;
 
 function fail(message) {
@@ -97,6 +99,21 @@ switch (check) {
     if (!shape) fail("a later joiner did not get the shape");
     console.log("relayed");
     for (const x of [a, b, c]) x.ws.close();
+    break;
+  }
+  case "presence": {
+    const a = await connect("smokeA");
+    const b = await connect("smokeB");
+    await a.hello();
+    await b.hello();
+    a.send({ type: "presence", presence: { name: "Smoke", color: "blue", cursor: { x: 5, y: 6 }, selection: [] } });
+    const seen = await b.next("presence");
+    if (seen.client !== "smokeA" || seen.presence.cursor?.x !== 5) fail(`got ${JSON.stringify(seen)}`);
+    a.ws.close();
+    const left = await b.next("left");
+    if (left.client !== "smokeA") fail(`got ${JSON.stringify(left)}`);
+    console.log("seen and left");
+    b.ws.close();
     break;
   }
   case "wait-close": {

@@ -61,6 +61,8 @@ export type BoardProps = {
   onView: (view: Viewport) => void;
   onCreated: (id: ShapeId, tool: Tool) => void;
   onEditText: (id: ShapeId) => void;
+  /** Where the pointer is on the board, or null when it leaves: for presence. */
+  onCursor: (at: Point | null) => void;
 };
 
 /** What a gesture shows while it lasts: render reads this, never the ref. */
@@ -185,12 +187,13 @@ export function Board(props: BoardProps) {
   }
 
   function move(event: ReactPointerEvent<SVGSVGElement>) {
+    const screen = local(event);
+    const p = toBoard(view, screen);
+    props.onCursor(p);
     const g = gesture.current;
     if (!g) {
       return;
     }
-    const screen = local(event);
-    const p = toBoard(view, screen);
     if (g.kind === "move" || g.kind === "resize" || g.kind === "endpoint") {
       if (!g.moved && Math.hypot(screen.x - g.startScreen.x, screen.y - g.startScreen.y) <= CLICK_SLOP) {
         return;
@@ -373,6 +376,9 @@ export function Board(props: BoardProps) {
       onPointerMove={move}
       onPointerUp={end}
       onPointerCancel={cancel}
+      onPointerLeave={() => {
+        props.onCursor(null);
+      }}
       onLostPointerCapture={() => {
         if (gesture.current) {
           cancel();

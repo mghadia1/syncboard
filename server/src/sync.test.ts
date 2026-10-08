@@ -160,11 +160,60 @@ describe("joining and relaying", () => {
     const { app, port } = await start();
     const { c: a } = await Client.join(port, "board01", "a");
     await Client.join(port, "board01", "b");
-    expect(app.rooms.peek("board01")?.peers.size).toBe(2);
+    expect(app.rooms.peek("board01")?.members.size).toBe(2);
     a.ws.close();
     await a.closed;
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(app.rooms.peek("board01")?.peers.size).toBe(1);
+    expect(app.rooms.peek("board01")?.members.size).toBe(1);
+  });
+});
+
+describe("presence", () => {
+  const presence = (name: string, x = 1) => ({ name, color: "blue", cursor: { x, y: 2 }, selection: [] });
+
+  test("is passed on to the others, never back; a later joiner is told who is here", async () => {
+    const { port } = await start();
+    const { c: a } = await Client.join(port, "board01", "a");
+    const { c: b } = await Client.join(port, "board01", "b");
+    a.send({ type: "presence", presence: presence("Ann") });
+    expect(await b.next("presence")).toEqual({ type: "presence", client: "a", presence: presence("Ann") });
+    a.send({ type: "presence", presence: presence("Ann", 9) });
+    expect(await b.next("presence")).toMatchObject({ presence: { cursor: { x: 9, y: 2 } } });
+    expect(await a.drain("presence")).toEqual([]);
+    b.send({ type: "presence", presence: presence("Bo") });
+    await a.next("presence");
+    const { welcome } = await Client.join(port, "board01", "c");
+    expect(welcome.peers).toEqual([
+      { client: "a", presence: presence("Ann", 9) },
+      { client: "b", presence: presence("Bo") },
+    ]);
+  });
+
+  test("someone who has not said who they are is not listed", async () => {
+    const { port } = await start();
+    await Client.join(port, "board01", "a");
+    const { welcome } = await Client.join(port, "board01", "b");
+    expect(welcome.peers).toEqual([]);
+  });
+
+  test("leaving is announced; a client's second connection closing is not a leave", async () => {
+    const { port } = await start();
+    const { c: a1 } = await Client.join(port, "board01", "a");
+    const { c: a2 } = await Client.join(port, "board01", "a"); // a reconnect, before the old one is gone
+    const { c: b } = await Client.join(port, "board01", "b");
+    a1.ws.close();
+    await a1.closed;
+    expect(await b.drain("left")).toEqual([]);
+    a2.ws.close();
+    expect(await b.next("left")).toEqual({ type: "left", client: "a" });
+  });
+
+  test("a malformed presence is refused", async () => {
+    const { port } = await start();
+    const { c } = await Client.join(port, "board01", "a");
+    c.send({ type: "presence", presence: { name: "", color: "blue", cursor: null, selection: [] } });
+    expect((await c.closed).code).toBe(CloseCode.BadMessage);
+    expect(c.inbox).toMatchObject([{ type: "error", code: "bad_message" }]);
   });
 });
 

@@ -8,11 +8,12 @@ It deliberately does not use Yjs, Automerge, Liveblocks, Socket.IO,
 tldraw, Excalidraw, Konva or Fabric: the point is to build the sync (a CRDT
 for the board, and a WebSocket protocol to carry it) and the drawing.
 
-> **Status:** Milestones 0-3 of 7. Boards are shared: everyone with a
+> **Status:** Milestones 0-4 of 7. Boards are shared: everyone with a
 > board's link draws on it at once (shapes, arrows, freehand, notes;
-> select, move, resize, recolor, restack, delete; pan and zoom; undo and
-> redo), keeps drawing through a dropped connection, and ends up with the
-> same board. Boards live in the server's memory: **a restart empties the
+> select, move, resize, recolor, restack, delete; pan and zoom), sees who
+> else is there with their pointers and selections, keeps drawing through
+> a dropped connection, and ends up with the same board. Undo reverts only
+> your own changes, and leaves what others have changed since. Boards live in the server's memory: **a restart empties the
 > server**, and a board comes back only from the browsers that still have
 > it open, until persistence (Milestone 5).
 >
@@ -27,7 +28,7 @@ for the board, and a WebSocket protocol to carry it) and the drawing.
 | 1 | The board as a CRDT in `shared`: last-writer-wins properties ordered by (Lamport clock, client id), tombstones, fractional indexes; property tests that any order, duplication or split of the operations converges | Done |
 | 2 | Drawing, one person: shapes, freehand, sticky notes; select, move, resize, delete; pan and zoom; undo and redo, all through the CRDT | Done |
 | 3 | Realtime sync: rooms, a snapshot on joining, operations relayed and acknowledged, reconnection that resends, offline edits merged | Done |
-| 4 | Presence (cursors, selections, who is here) and undo of only your own changes | Not started |
+| 4 | Presence (cursors, selections, who is here) and undo of only your own changes | Done |
 | 5 | Persistence: an operation log and snapshots per board; SIGKILL test | Not started |
 | 6 | Two replicas sharing rooms through Redis pub/sub; load test of propagation latency and convergence | Not started |
 | 7 | README: diagram, design decisions, failures found, benchmarks; explain-it-yourself prompts | Not started |
@@ -53,17 +54,19 @@ WebSocket checks.
 
 A board's link is `/b/<id>`; opening `/` starts a new board. Every browser
 on a board holds a replica (see below), edits it at once, and exchanges
-edits through the server: JSON text frames on `/ws`, protocol version 2,
+edits through the server: JSON text frames on `/ws`, protocol version 3,
 typed in `shared/src/protocol.ts` and used by both sides.
 
 ```
 browser                                        server
 hello {board, client}               ───►
-                                    ◄───       welcome {epoch, snapshot: the whole board}
+                                    ◄───       welcome {epoch, snapshot: the whole board, peers}
 state {snapshot}  (a new epoch: see below) ─►  merged; what was new relayed
 ops [its own edits]                 ───►       checked, applied, relayed to the others
                                     ◄───       ack {upTo: counter}
                                     ◄───       ops [the others' edits]
+presence {name, color, cursor, selection} ─►   relayed as presence {client, ...}
+                                    ◄───       left {client}
 ```
 
 - **Joining** gets the whole board, built by the server's own replica from
@@ -123,6 +126,21 @@ ops [its own edits]                 ───►       checked, applied, relayed
   clients, mixed with cuts, blocks, heals, pauses and server restarts.
   After every run, the network heals, and every client's board and the
   server's must be identical. It found failure 10.
+- **Presence,** against the real server: passed on and never echoed, the
+  welcome's list of who is here, `left` announced (and not when a client's
+  second connection closes), a malformed presence refused; in the browser
+  code, sending at most every 40 ms and again after each welcome, and the
+  list of others kept and forgotten offline. End to end, one person's
+  pointer and name reach the other, and leaving takes them away.
+- **Undo with others editing:** the cases above (theirs kept, an older
+  edit of theirs not in the way, the move-move-move case, redo, a merged
+  board's edits counted as others' but this replica's own not, a
+  cancelled gesture), and two properties over random interleavings of
+  my edits, their edits (seen or concurrent), undos and redos: an undo or
+  redo never overwrites a value someone else wrote that still stands;
+  and with nobody else editing, undoing everything gives back the start.
+  End to end, an undo keeps the other person's later move. Five planted
+  bugs each fail these tests (failure 12).
 - **Eight planted bugs in the sync,** one at a time, each make the tests
   fail, the property test above among them for seven: an ack that drops
   everything pending, a reconnect that does not resend, a new epoch not
@@ -135,12 +153,36 @@ ops [its own edits]                 ───►       checked, applied, relayed
   tabs back with all three shapes; a reload, which starts from nothing,
   got them all from the server's rebuilt copy.
 
-What it does **not** do yet: who else is on the board, and their cursors
-(Milestone 4); keep boards on disk (Milestone 5); limit how fast a client
-may send, or drop a client too slow to read what it is sent (its frames
+What it does **not** do yet: keep boards on disk (Milestone 5); limit how
+fast a client may send (presence included: every message is passed to
+everyone else on the board), or drop a client too slow to read what it is sent (its frames
 queue in the server's memory); shrink what is pending (a drag made offline
 resends every intermediate position); send anything but the whole board
 on joining.
+
+## Who else is here
+
+- **People:** the masthead shows you (click to rename) and up to five
+  others, by initials in their colors; a screen reader hears how many
+  others are here. Your name is generated the first time ("Teal Otter")
+  and kept in this browser; its color follows from the name, so a name
+  looks the same to everyone. There are no accounts.
+- **Pointers and selections:** everyone else's pointer, with their name,
+  and an outline around what they have selected, in their color. Both are
+  in board coordinates, so they land on the same shape whatever each
+  viewer's pan and zoom.
+- **Presence is not the board.** It is not a CRDT, not stored and not
+  acknowledged: the server passes it on and forgets it when a connection
+  closes, announcing `left`. A browser sends its own at most every 40 ms
+  (a pointer moves 60 to 120 times a second; the latest wins) and again
+  after every welcome; offline, it forgets the others, since it cannot
+  know who is there.
+- A browser can briefly have two connections (a reconnect before the old
+  one is noticed gone); others see it once, and its old connection closing
+  is not announced as leaving.
+- **Colors for people** are the four markers that keep a name tag's text
+  at 4.5:1 or better in both themes (red, green, blue, violet); orange
+  (3.7:1) and yellow (3.1:1) do not, under white text in the light theme.
 
 ## Drawing
 
@@ -171,10 +213,21 @@ to back and Delete.
   values they had, with new stamps; it rewinds nothing. A gesture (a
   drag, a resize, a typing session) is one undo step however many
   operations it made, and cancelling one (Escape, a lost pointer) puts
-  things back without leaving a step. Undo knows only this browser's
-  changes, and puts back what *it* had; if someone else has moved the
-  shape since, undo moves it back anyway. What undo should do with
-  other people's edits mixed in is Milestone 4.
+  things back without leaving a step.
+- **Undo reverts only your own changes.** For each property a step
+  changed, the editor keeps the stamp of the edit that last wrote it; for
+  each property on the board, the newest edit by anyone else. Undo (and
+  redo, and cancelling a gesture) leaves a property someone else has
+  written since, and says so: "Could not undo Move shape: someone else
+  has changed it since", or "Undid Edit, except what someone else has
+  changed since", out loud and in a notice on screen. The rule is per
+  property: undoing a shape's creation deletes it even if someone else
+  has moved it.
+- **"Is the current value still mine?" is not the test,** and the
+  difference is real: move a shape, someone else moves it, move it
+  again, and undo twice. The second undo finds a value of its own (the
+  first undo's) and would wipe the other person's move. Comparing stamps
+  with the newest edit by anyone else does not; a test plays exactly this.
 - **A click is not an edit.** Gestures that change shapes start only after
   the pointer moves 4 pixels, so selecting a shape sends nothing and
   leaves nothing to undo.
@@ -317,6 +370,9 @@ make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
 | `client/src/App.tsx` | The page: the masthead, the sync status, the whiteboard |
 | `client/src/sync/sync.ts` | The sync engine: pending edits, acks, reconnecting, uploading a lost board |
 | `client/src/sync/where.ts` | The board from the page's address; the WebSocket's URL |
+| `client/src/sync/identity.ts` | Your name (kept in this browser) and its color |
+| `client/src/People.tsx`, `client/src/canvas/Peers.tsx` | Who is here; others' pointers and selections |
+| `shared/src/presence.ts` | Presence: its type and its check |
 | `server/src/sync.ts` | One connection's protocol: hello, checks, apply, relay, ack |
 | `server/src/rooms.ts` | The boards in memory: one room and one replica each; limits |
 | `shared/src/board/snapshot.ts` | A whole board on the wire; chunking it; merging one |
@@ -502,3 +558,21 @@ make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
     a refusal comes alone. The browser would have dropped refused edits as
     if the server had them. Every refusal test now requires the error to
     be the only answer.
+12. **One of five planted undo bugs passed.** Counting this replica's own
+    edits as someone else's was not caught: the test merged back a board
+    holding only edits with the same stamps as the steps, and an equal
+    stamp never blocks an undo. It matters after a reconnect, when the
+    server's board holds a later edit of yours than the step being undone.
+    A test now plays that; all five fail it. (Two other new tests were
+    wrong at first, and taught something: an edit "older" than mine had
+    the same counter, and an equal counter goes to the higher client id,
+    so it was the newer one.)
+13. **Two people colors were unreadable.** Name tags put white text on a
+    person's marker color in the light theme; computed, orange came to
+    3.7:1 and yellow to 3.1:1, under the 4.5:1 that small text needs.
+    People now get only red, green, blue and violet (4.9:1 and better in
+    both themes).
+14. **Renaming yourself added to the old name.** Tried in the browser:
+    the name field opened with the cursor after the old name, so typing
+    made "Amber KoalaSecond Tab". It now opens with the name selected;
+    a test checks the selection.

@@ -1,9 +1,11 @@
-import type { Color, ShapeId } from "@syncboard/shared";
+import type { Color, Presence, ShapeId } from "@syncboard/shared";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { Editor } from "../board/editor";
+import type { Editor, Outcome } from "../board/editor";
+import { describeOutcome } from "./outcome";
 import { type Viewport, zoomAt } from "../board/geometry";
 import { Board } from "./Board";
 import { NoteEditor } from "./NoteEditor";
+import { PeersLayer } from "./Peers";
 import { Toolbar } from "./Toolbar";
 import { KIND, TOOLS, type Tool } from "./tools";
 
@@ -18,7 +20,17 @@ function typingIn(target: EventTarget | null): boolean {
  * color, the selection, where the viewport is, which note is being typed
  * in. The board itself lives in the editor.
  */
-export function Whiteboard({ editor }: { editor: Editor }) {
+export type WhiteboardProps = {
+  editor: Editor;
+  /** Everyone else on the board. */
+  peers?: ReadonlyMap<string, Presence>;
+  /** This person's cursor and selection, for the others. */
+  onPresence?: (change: Partial<Presence>) => void;
+};
+
+const NOBODY: ReadonlyMap<string, Presence> = new Map();
+
+export function Whiteboard({ editor, peers = NOBODY, onPresence }: WhiteboardProps) {
   const { shapes, undoLabel, redoLabel } = useSyncExternalStore(editor.subscribe, editor.getSnapshot);
   const [tool, setTool] = useState<Tool>("select");
   const [color, setColor] = useState<Color>("ink");
@@ -28,10 +40,31 @@ export function Whiteboard({ editor }: { editor: Editor }) {
   const [panning, setPanning] = useState(false);
   const [editing, setEditing] = useState<ShapeId | null>(null);
   const [message, setMessage] = useState("");
+  // Said out loud as well as in the live region: an undo that changed
+  // nothing would otherwise look broken.
+  const [notice, setNotice] = useState("");
   const area = useRef<HTMLDivElement>(null);
 
   // A shape deleted (by undo, or by someone else) drops out of the selection.
   const selection = chosen.filter((id) => shapes.some((shape) => shape.id === id));
+
+  // Others see what is selected here.
+  const selected = selection.join(" ");
+  useEffect(() => {
+    onPresence?.({ selection: selected === "" ? [] : selected.split(" ") });
+  }, [selected, onPresence]);
+
+  useEffect(() => {
+    if (notice === "") {
+      return;
+    }
+    const timer = setTimeout(() => {
+      setNotice("");
+    }, 4000);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [notice]);
   const note = editing === null ? undefined : shapes.find((shape) => shape.id === editing);
 
   // If someone else deletes the note being typed in, the typing ends: its
@@ -115,18 +148,23 @@ export function Whiteboard({ editor }: { editor: Editor }) {
     }
   }
 
-  function undo() {
-    if (undoLabel) {
-      editor.undo();
-      announce(`Undid ${undoLabel}`);
+  function report(outcome: Outcome | null, done: "Undid" | "Redid") {
+    if (!outcome) {
+      return;
+    }
+    const text = describeOutcome(outcome, done);
+    announce(text);
+    if (outcome.kept > 0) {
+      setNotice(text);
     }
   }
 
+  function undo() {
+    report(editor.undo(), "Undid");
+  }
+
   function redo() {
-    if (redoLabel) {
-      editor.redo();
-      announce(`Redid ${redoLabel}`);
-    }
+    report(editor.redo(), "Redid");
   }
 
   function nudge(dx: number, dy: number) {
@@ -278,7 +316,9 @@ export function Whiteboard({ editor }: { editor: Editor }) {
             }
           }}
           onEditText={startEditing}
+          onCursor={(at) => onPresence?.({ cursor: at })}
         />
+        <PeersLayer peers={peers} shapes={shapes} view={view} />
         {note && <NoteEditor key={note.id} editor={editor} note={note} view={view} onDone={stopEditing} />}
         {shapes.length === 0 && editing === null && (
           <p className="board-hint">Choose a tool below and drag on the board, or press R for a rectangle.</p>
@@ -327,6 +367,11 @@ export function Whiteboard({ editor }: { editor: Editor }) {
       <div className="visually-hidden" role="status" aria-live="polite" data-testid="announcer">
         {message}
       </div>
+      {notice !== "" && (
+        <p className="notice" aria-hidden="true">
+          {notice}
+        </p>
+      )}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { MAX_OPS_PER_MESSAGE, PROTOCOL_VERSION, parseClientMessage, parseServerM
 
 const op = { shape: "c1.1", stamp: { counter: 1, client: "c1" }, set: { x: 1 } };
 const hello = { type: "hello", protocol: PROTOCOL_VERSION, board: "board123", client: "c1" };
+const presence = { name: "Teal Otter", color: "blue", cursor: { x: 1, y: 2 }, selection: ["c1.1"] };
 
 function refused(parsed: { ok: boolean; error?: string }, error: string) {
   expect(parsed.ok).toBe(false);
@@ -18,6 +19,13 @@ describe("parseClientMessage", () => {
     expect(parseClientMessage(JSON.stringify({ type: "hello", protocol: 1 }))).toEqual({
       ok: true,
       message: { type: "hello", protocol: 1, board: "", client: "" },
+    });
+  });
+
+  test("accepts a presence", () => {
+    expect(parseClientMessage(JSON.stringify({ type: "presence", presence }))).toEqual({
+      ok: true,
+      message: { type: "presence", presence },
     });
   });
 
@@ -67,6 +75,7 @@ describe("parseServerMessage", () => {
     board: "board123",
     epoch: "e1",
     snapshot: [],
+    peers: [{ client: "c2", presence }],
   };
 
   test("accepts each message", () => {
@@ -75,6 +84,8 @@ describe("parseServerMessage", () => {
       { type: "ops", ops: [op] },
       { type: "ack", upTo: 7 },
       { type: "error", code: "not_yours", message: "no" },
+      { type: "presence", client: "c2", presence },
+      { type: "left", client: "c2" },
     ]) {
       expect(parseServerMessage(JSON.stringify(message))).toEqual({ ok: true, message });
     }
@@ -84,6 +95,10 @@ describe("parseServerMessage", () => {
     [JSON.stringify({ ...welcome, epoch: "" }), "welcome needs"],
     [JSON.stringify({ ...welcome, board: "x" }), "welcome needs"],
     [JSON.stringify({ ...welcome, snapshot: [["s", [["kind", "star", 1, "c"]]]] }), "bad value for kind"],
+    [JSON.stringify({ ...welcome, peers: undefined }), "peers must be a list"],
+    [JSON.stringify({ ...welcome, peers: [{ client: "c2" }] }), "each peer needs"],
+    [JSON.stringify({ type: "presence", client: "a b", presence }), "presence needs a client id"],
+    ['{"type":"left"}', "left needs a client id"],
     ['{"type":"ack","upTo":0}', "ack needs a counter"],
     ['{"type":"ack","upTo":1.5}', "ack needs a counter"],
     ['{"type":"error","code":"teapot","message":"x"}', "error needs a known code"],
