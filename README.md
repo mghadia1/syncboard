@@ -8,9 +8,11 @@ It deliberately does not use Yjs, Automerge, Liveblocks, Socket.IO,
 tldraw, Excalidraw, Konva or Fabric: the point is to build the sync (a CRDT
 for the board, and a WebSocket protocol to carry it) and the drawing.
 
-> **Status:** Milestone 0 of 7, the skeleton. The server answers a health
-> check, serves the client, and greets it over a WebSocket with typed,
-> validated messages; there is nothing to draw on yet.
+> **Status:** Milestones 0-1 of 7. The board exists as a CRDT in the shared
+> package, tested to converge however its operations are ordered,
+> repeated or split; the server answers a health check, serves the client
+> and greets it over a WebSocket. Nothing uses the board yet: there is no
+> drawing (Milestone 2) and no sync over the network (Milestone 3).
 >
 > TypeScript is the language I am learning on this project (built with
 > Claude): it is not on my resume until I can write and explain it unaided.
@@ -20,7 +22,7 @@ for the board, and a WebSocket protocol to carry it) and the drawing.
 | # | Milestone | Status |
 |---|-----------|--------|
 | 0 | Skeleton: npm workspaces (shared, server, client), strict TypeScript, ESLint, Vitest; a Node server with `/healthz`, graceful shutdown and a typed WebSocket hello; React (Vite, TypeScript) shell served by the server; one-container Compose; CI | Done |
-| 1 | The board as a CRDT in `shared`: last-writer-wins properties ordered by (Lamport clock, client id), tombstones, fractional indexes; property tests that any order, duplication or split of the operations converges | Not started |
+| 1 | The board as a CRDT in `shared`: last-writer-wins properties ordered by (Lamport clock, client id), tombstones, fractional indexes; property tests that any order, duplication or split of the operations converges | Done |
 | 2 | Drawing, one person: shapes, freehand, sticky notes; select, move, resize, delete; pan and zoom; undo and redo, all through the CRDT | Not started |
 | 3 | Realtime sync: rooms, a snapshot on joining, operations relayed and acknowledged, reconnection that resends, offline edits merged | Not started |
 | 4 | Presence (cursors, selections, who is here) and undo of only your own changes | Not started |
@@ -67,6 +69,97 @@ browser ──► {"type": "hello", "protocol": 1}
 - On shutdown every open client gets **1001** ("server shutting down"); a
   client that does not finish closing within 5 s is cut off.
 
+## How the board stays the same everywhere
+
+Every browser holds its own copy of the board (a *replica*) and edits it
+at once, without asking the server. Copies then exchange their edits, and
+must end up identical however the edits travel: late, out of order,
+twice, or through someone else. The board is a CRDT (conflict-free
+replicated data type) built for that, in `shared/src/board/`:
+
+- **One kind of edit:** an *operation* sets some properties of one shape,
+  all with one *stamp*. Creating a shape sets every property; moving it
+  sets `x` and `y`; deleting it sets `deleted`.
+
+  ```json
+  {"shape": "3f9c2a1b7d4e6f80.12", "stamp": {"counter": 14, "client": "3f9c2a1b7d4e6f80"}, "set": {"x": 120, "y": 40}}
+  ```
+
+- **Each property is a last-writer-wins register.** A shape is a map from
+  property to (value, stamp), and an arriving value replaces the stored
+  one only if its stamp is later. Taking the later of two values does not
+  depend on which arrives first, or how often, so copies that have seen
+  the same edits hold the same board. Two people can change different
+  properties of one shape at once (one moves it, one recolors it) and
+  both changes stay.
+- **"Later" is a Lamport clock.** Each copy counts its own edits and jumps
+  past the counter of every edit it receives, so an edit made after
+  seeing another always has a higher counter and wins. Edits made at the
+  same time without seeing each other are ordered by client id:
+  arbitrarily, but the same everywhere.
+- **Deleting keeps a tombstone.** A deleted shape stays, with `deleted`
+  set, so a move that arrives after the delete changes a deleted shape
+  instead of bringing it back. Undoing a delete is a later `deleted:
+  false`.
+- **An edit can arrive before its shape:** it is kept and merged when the
+  creation comes; a shape is drawn once it has a kind and a box.
+- **Stacking order is a fractional index:** each shape holds a key, and
+  shapes are drawn in key order (then by id, for two keys chosen at once).
+  There is always room for a key between two others, so moving a shape in
+  the stack changes only that shape. Keys are base-62 strings that never
+  end in "0"; a shape put on top gets the top key with its last digit
+  raised, which grows keys by one character every 61 shapes.
+- **Whole states merge the same way** (`Replica.merge`), register by
+  register: a snapshot of a board can be combined with anything else.
+
+### How it is tested
+
+- **Against a model.** fast-check plays random histories: two to four
+  replicas create, edit, delete and restore shapes they know about, and
+  receive a random part of each other's operations as they go. The board
+  built from all the operations must equal a separately written model
+  (for each property, the value of the latest operation that set it), with
+  its own ordering code, so a bug in the comparison cannot hide on both
+  sides.
+- **Order, repeats and splits.** The same operations in a shuffled order
+  with some repeated; every replica catching up from wherever it stood;
+  and the operations split among up to four replicas whose whole states
+  are then merged in any order: all must give the same board.
+- **Causality.** In every history, each edit a replica makes is checked to
+  be stamped later than everything that replica has seen, and a new shape
+  to land on top of everything it draws.
+- **The wire.** Every operation a replica makes survives JSON and the
+  network checks (`parseOperation`) unchanged; 22 malformed operations are
+  refused, each with its reason.
+- **Order keys:** any sequence of insertions (on top, at the bottom, at
+  either end, between two keys) keeps keys valid, distinct and in order;
+  `keyBetween` lands between any two keys, including a key and itself
+  followed by zeros.
+- **Eleven planted bugs,** one at a time, each make the tests fail: the
+  client tie-break dropped, the clock not moved on receiving or on
+  merging, equal stamps settled by arrival, the comparison flipped,
+  deleted shapes drawn, an edit wiping what was known about its shape, a
+  key that does not go up, a missing digit not read as zero, unknown
+  properties skipped, new shapes put at the bottom. Two of them passed at
+  first (failure 2).
+
+What it does **not** do yet:
+
+- **Concurrent edits of the same property keep one of them.** Two people
+  dragging the same shape at once: one position wins. That is the point
+  of a register, but for a note's text it means two people typing in the
+  same note at once keep only one person's text; merging text character
+  by character needs a sequence CRDT, which is not built.
+- **Tombstones are never removed.** Doing so safely needs to know every
+  replica has seen the delete.
+- **A client could send a huge counter** (anything below 2^53 is valid),
+  and every clock would jump to it. The server should refuse counters far
+  ahead of what it has seen; that belongs with sync (Milestone 3).
+- **Order keys are never rebalanced.** A key grows by a character every 61
+  shapes put on top or sent to the back, and every 5 or 6 placed between
+  the same two neighbours (measured); at 1,024 characters a new key is
+  refused rather than sent.
+
 ## HTTP
 
 | Path | Answer |
@@ -93,6 +186,12 @@ make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
 | Path | What |
 |------|------|
 | `shared/src/protocol.ts` | The messages, their types and their validation |
+| `shared/src/board/replica.ts` | The board as a CRDT: applying operations, merging states, the shapes to draw |
+| `shared/src/board/shape.ts` | A shape's properties, and the check for each |
+| `shared/src/board/operation.ts` | The operation, and checking one from the network |
+| `shared/src/board/stamp.ts` | Stamps, their order, and client ids |
+| `shared/src/board/order.ts` | Fractional order keys |
+| `shared/src/board/replica.test.ts` | The simulation, the model, and the convergence properties |
 | `server/src/app.ts` | The HTTP server, the WebSocket endpoint, shutdown |
 | `server/src/static.ts` | Serving the built client, and nothing else from disk |
 | `server/src/config.ts` | `SYNCBOARD_*` environment variables |
@@ -140,6 +239,26 @@ make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
   `client/dist`, so the image installs only `ws`. Of its 242 MB, about
   3.4 MB is SyncBoard (dependencies, server, client); the rest is the Node
   base image.
+- **A register per property, not per shape.** Concurrent edits of
+  different properties both survive; with a register per shape, a recolor
+  would undo a concurrent move.
+- **Strings compare with `<`, never `localeCompare`,** whose answer
+  depends on the machine's locale: two replicas must never disagree about
+  which client id or key comes first.
+- **Equal stamps are settled by the value.** Honest replicas never make
+  two edits with one stamp, but if one did (a bug, or a forged
+  operation), every replica still picks the same value.
+- **A new client id every time a page loads,** 64 random bits from
+  `crypto.getRandomValues`: a reloaded page has lost its clock, and must
+  not repeat stamps it used before. Not `randomUUID`, which browsers offer
+  only on HTTPS and localhost.
+- **Operations with unknown properties are refused,** not stripped: the
+  board could not store them, and a new property is a protocol change.
+- **Colors are names** ("ink", "blue"), not hex, so each can have its own
+  light and dark rendering.
+- **Order keys go on top by raising the last digit,** not by midpoint:
+  after 1,000 shapes added on top, keys are 17 characters long instead of
+  201 (measured).
 - **Not yet:** authentication, boards, and an `Origin` check on the
   WebSocket. Anyone who can reach the port can connect and say hello,
   which is all there is to do so far.
@@ -154,3 +273,24 @@ make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
    behind; the server now logs the error, and tests for both cases check
    that a new client is still answered afterwards. With the listener
    removed, both fail.
+2. **The convergence tests missed two of eleven planted bugs.** Dropping
+   "a missing digit counts as zero" from the key midpoint makes invalid
+   keys, but only between the start of the board and a key, or between a
+   key and itself followed by zeros ("V" and "V0z"), and no test produced
+   those pairs. Putting new shapes just above the bottom shape instead of
+   on top looked right: with two shapes the bottom one is also the top,
+   and with more, the identical keys this made were broken by shape id in
+   creation order. New properties generate those key pairs, and every
+   simulated creation must land strictly on top; all eleven now fail.
+3. **Sending shapes to the back would have broken sync,** once drawing
+   used it (nothing did yet). Measuring key
+   growth (to check a comment, which said ten times; it is twelve) showed
+   that repeated midpoints toward the start grow a key by a character
+   every 6 uses, so about 6,000 "send to back"s would make keys longer
+   than the 1,024 every replica accepts: the sender would apply its own
+   edit, and everyone else would refuse it. `keyBefore` now mirrors
+   `keyAfter`, and no function returns a key over the limit.
+4. **A test that could not fail.** An ordering check was written as
+   `keys[i - 1] ?? "" < key`, which JavaScript reads as
+   `keys[i - 1] ?? ("" < key)`: always truthy. Caught on reading it before
+   the first run; it now has parentheses.
