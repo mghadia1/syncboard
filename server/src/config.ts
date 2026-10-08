@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_LIMITS, type Limits } from "./rooms.js";
+import { DEFAULT_LIMITS, DEFAULT_TIMING, type Limits, type Timing } from "./rooms.js";
 
 export type Config = {
   host: string;
@@ -14,6 +14,12 @@ export type Config = {
   /** How often connections are pinged; one that has not answered by the next ping is cut off. */
   heartbeatMs: number;
   limits: Limits;
+  /**
+   * Redis, through which servers sharing the data directory share boards
+   * (redis://host:port); null for a server on its own.
+   */
+  redisUrl: string | null;
+  timing: Timing;
 };
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -28,6 +34,17 @@ function integer(env: NodeJS.ProcessEnv, name: string, fallback: number): number
     throw new Error(`${name} must be a whole number, not ${JSON.stringify(raw)}`);
   }
   return value;
+}
+
+function redisUrl(raw: string | undefined): string | null {
+  if (raw === undefined || raw === "") {
+    return null;
+  }
+  const url = URL.parse(raw);
+  if (url?.protocol !== "redis:" && url?.protocol !== "rediss:") {
+    throw new Error(`SYNCBOARD_REDIS_URL must be a redis:// or rediss:// URL, not ${JSON.stringify(raw)}`);
+  }
+  return raw;
 }
 
 /** Reads SYNCBOARD_* environment variables; anything invalid stops startup. */
@@ -49,6 +66,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     limits: {
       maxBoards: Math.max(1, integer(env, "SYNCBOARD_MAX_BOARDS", DEFAULT_LIMITS.maxBoards)),
       maxShapes: Math.max(1, integer(env, "SYNCBOARD_MAX_SHAPES", DEFAULT_LIMITS.maxShapes)),
+    },
+    redisUrl: redisUrl(env.SYNCBOARD_REDIS_URL),
+    timing: {
+      pollMs: Math.max(50, integer(env, "SYNCBOARD_POLL_MS", DEFAULT_TIMING.pollMs)),
+      rosterMs: Math.max(100, integer(env, "SYNCBOARD_ROSTER_MS", DEFAULT_TIMING.rosterMs)),
     },
   };
 }

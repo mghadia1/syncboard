@@ -8,7 +8,7 @@ import { Editor } from "../client/src/board/editor";
 import { Sync } from "../client/src/sync/sync";
 import { type App, createApp } from "../server/src/app.js";
 import { silentLog } from "../server/src/log.js";
-import { DEFAULT_LIMITS } from "../server/src/rooms.js";
+import { DEFAULT_LIMITS, DEFAULT_TIMING } from "../server/src/rooms.js";
 import { Link } from "./link";
 
 /**
@@ -66,6 +66,8 @@ class World {
         shutdownGraceMs: 200,
         heartbeatMs: 30_000,
         limits: DEFAULT_LIMITS,
+        redisUrl: null,
+        timing: DEFAULT_TIMING,
       },
       silentLog,
     );

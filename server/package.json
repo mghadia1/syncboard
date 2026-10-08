@@ -11,6 +11,7 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@redis/client": "^6.3.0",
     "@syncboard/shared": "0.1.0",
     "ws": "^8.22.0"
   },

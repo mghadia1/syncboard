@@ -9,7 +9,7 @@ import WebSocket from "ws";
 import { type App, createApp } from "./app.js";
 import type { Config } from "./config.js";
 import { silentLog } from "./log.js";
-import { DEFAULT_LIMITS } from "./rooms.js";
+import { DEFAULT_LIMITS, DEFAULT_TIMING } from "./rooms.js";
 import { VERSION } from "./version.js";
 
 const SECRET = "the server's own files must never be served";
@@ -44,6 +44,8 @@ async function start(config: Partial<Config> = {}): Promise<{ app: App; port: nu
       shutdownGraceMs: 2000,
       heartbeatMs: 30_000,
       limits: DEFAULT_LIMITS,
+      redisUrl: null,
+      timing: DEFAULT_TIMING,
       ...config,
     },
     silentLog,
@@ -105,7 +107,7 @@ describe("HTTP", () => {
     const { port } = await start();
     const get = await raw(port, "/healthz");
     expect(get.status).toBe(200);
-    expect(JSON.parse(get.body)).toEqual({ status: "ok", version: VERSION });
+    expect(JSON.parse(get.body)).toEqual({ status: "ok", version: VERSION, bus: "off" });
     const head = await raw(port, "/healthz", "HEAD");
     expect(head.status).toBe(200);
     expect(head.body).toBe("");

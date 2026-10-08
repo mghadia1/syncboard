@@ -1,0 +1,12 @@
+{
+  // The load generator and the benchmark runner: type-checked like the
+  // rest, run with tsx (in the generator's container, and on the host).
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "tsBuildInfoFile": "../node_modules/.tmp/bench.tsbuildinfo",
+    "types": ["node"]
+  },
+  "include": ["."],
+  "references": [{ "path": "../shared/tsconfig.build.json" }]
+}

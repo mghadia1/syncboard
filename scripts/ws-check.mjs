@@ -14,11 +14,21 @@
 //   wait-close   say hello, print "ready", then print the close code when
 //                the server closes the connection (for the shutdown check)
 //
+// Two servers sharing boards (node scripts/ws-check.mjs <ws-url> <check>
+// <other-ws-url>):
+//
+//   cross           a client on the other server waits; an edit made
+//                   here reaches it: prints "crossed" and how long it took
+//   presence-cross  a pointer here reaches the other server's client, and
+//                   closing here sends it "left"
+//
 // Prints what it saw; exits 1 if it was not what the check expects.
 
-const [url, check, boardArg] = process.argv.slice(2);
+const [url, check, arg] = process.argv.slice(2);
 const PROTOCOL = 3;
-const BOARD = boardArg ?? `smoke${Date.now().toString(36)}`;
+const CROSS = check === "cross" || check === "presence-cross";
+const otherUrl = CROSS ? arg : undefined;
+const BOARD = (CROSS ? undefined : arg) ?? `smoke${Date.now().toString(36)}`;
 
 function fail(message) {
   console.error(`FAIL ws ${check}: ${message}`);
@@ -28,8 +38,8 @@ function fail(message) {
 setTimeout(() => fail("timed out after 10 s"), 10_000).unref();
 
 /** A connection that queues what arrives, so the check can wait for it. */
-async function connect(client) {
-  const ws = new WebSocket(url);
+async function connect(client, server = url) {
+  const ws = new WebSocket(server);
   const inbox = [];
   let wake = () => {};
   ws.onmessage = (event) => {
@@ -116,6 +126,43 @@ switch (check) {
     if (left.client !== "smokeA") fail(`got ${JSON.stringify(left)}`);
     console.log("seen and left");
     b.ws.close();
+    break;
+  }
+  case "cross": {
+    if (!otherUrl) fail("needs the other server's URL");
+    const there = await connect("smokeThere", otherUrl);
+    const here = await connect("smokeHere");
+    await there.hello();
+    await here.hello();
+    const op = {
+      shape: "smokeHere.1",
+      stamp: { counter: 1, client: "smokeHere" },
+      set: { kind: "note", x: 0, y: 0, w: 10, h: 10, z: "V", text: "across" },
+    };
+    const sent = performance.now();
+    here.send({ type: "ops", ops: [op] });
+    const relayed = await there.next("ops");
+    const ms = performance.now() - sent;
+    if (relayed.ops[0]?.set.text !== "across") fail(`got ${JSON.stringify(relayed)}`);
+    console.log(`crossed in ${ms.toFixed(1)} ms`);
+    here.ws.close();
+    there.ws.close();
+    break;
+  }
+  case "presence-cross": {
+    if (!otherUrl) fail("needs the other server's URL");
+    const there = await connect("smokeThere", otherUrl);
+    const here = await connect("smokeHere");
+    await there.hello();
+    await here.hello();
+    here.send({ type: "presence", presence: { name: "Smoke", color: "blue", cursor: { x: 5, y: 6 }, selection: [] } });
+    const seen = await there.next("presence");
+    if (seen.client !== "smokeHere" || seen.presence.cursor?.x !== 5) fail(`got ${JSON.stringify(seen)}`);
+    here.ws.close();
+    const left = await there.next("left");
+    if (left.client !== "smokeHere") fail(`got ${JSON.stringify(left)}`);
+    console.log("seen and left");
+    there.ws.close();
     break;
   }
   case "write": {

@@ -1,0 +1,38 @@
+# The benchmark's stack: bench/run.ts starts it fresh (an empty data
+# volume) for every run, as its own Compose project, with nothing published
+# on the host. The load generator runs on the same network:
+#   docker compose -f bench/compose.bench.yaml run --rm --no-deps load ...
+
+name: syncboard-bench
+
+services:
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+
+  a: &server
+    build: ..
+    environment:
+      SYNCBOARD_REDIS_URL: redis://redis:6379
+    volumes:
+      - boards:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  b:
+    <<: *server
+
+  load:
+    build:
+      context: ..
+      dockerfile: bench/Dockerfile
+    profiles: ["load"]
+
+volumes:
+  boards:

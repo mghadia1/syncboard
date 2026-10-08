@@ -25,7 +25,7 @@ export default tseslint.config(
     ...tseslint.configs.disableTypeChecked,
   },
   {
-    files: ["shared/**/*.ts", "server/**/*.ts", "*.ts", "*.js", "scripts/*.mjs"],
+    files: ["shared/**/*.ts", "server/**/*.ts", "bench/**/*.ts", "*.ts", "*.js", "scripts/*.mjs"],
     languageOptions: { globals: globals.node },
   },
   {

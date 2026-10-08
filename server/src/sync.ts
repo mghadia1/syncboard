@@ -16,10 +16,10 @@ import { VERSION } from "./version.js";
 
 /**
  * One connection, from hello to close: join a room, take the replica's
- * operations (checked, applied, relayed to the room, acknowledged), take
- * an uploaded state the same way, pass presence on, and leave the room on
- * close (telling the others, unless the client is still there on another
- * connection).
+ * operations (checked, applied and stored, passed on to the other servers,
+ * relayed to the room, acknowledged), take an uploaded state the same way,
+ * pass presence on, and leave the room on close (telling the others,
+ * unless the client is still there on another connection).
  */
 
 function text(data: RawData): string {
@@ -155,8 +155,7 @@ export function handleConnection(ws: WebSocket, rooms: Rooms, log: Log): void {
       return;
     }
     if (message.type === "presence") {
-      member.presence = message.presence;
-      room.relay({ type: "presence", client: member.client, presence: message.presence }, member);
+      room.say(member, message.presence);
       return;
     }
     if (message.type === "ops") {
@@ -209,9 +208,7 @@ export function handleConnection(ws: WebSocket, rooms: Rooms, log: Log): void {
   ws.on("close", () => {
     if (joined) {
       const { room, member } = joined;
-      if (room.leave(member)) {
-        room.relay({ type: "left", client: member.client }, member);
-      }
+      room.leave(member);
       // The board is on disk: an empty room need not stay in memory.
       if (room.members.size === 0 && rooms.peek(room.board) === room) {
         rooms.unload(room.board);

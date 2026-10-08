@@ -11,6 +11,9 @@ describe("loadConfig", () => {
     expect(config.clientDir.endsWith(path.join("client", "dist"))).toBe(true);
     expect(config.dataDir.endsWith(`${path.sep}data`)).toBe(true);
     expect(loadConfig({ SYNCBOARD_DATA_DIR: ":memory:" }).dataDir).toBe(":memory:");
+    // Alone, unless told where Redis is.
+    expect(config.redisUrl).toBeNull();
+    expect(config.timing).toEqual({ pollMs: 500, rosterMs: 2000 });
   });
 
   test("reads SYNCBOARD_* variables", () => {
@@ -24,6 +27,9 @@ describe("loadConfig", () => {
         SYNCBOARD_HEARTBEAT_MS: "5000",
         SYNCBOARD_MAX_BOARDS: "3",
         SYNCBOARD_MAX_SHAPES: "50",
+        SYNCBOARD_REDIS_URL: "redis://redis:6379",
+        SYNCBOARD_POLL_MS: "250",
+        SYNCBOARD_ROSTER_MS: "1000",
       }),
     ).toEqual({
       host: "127.0.0.1",
@@ -33,6 +39,8 @@ describe("loadConfig", () => {
       shutdownGraceMs: 100,
       heartbeatMs: 5000,
       limits: { maxBoards: 3, maxShapes: 50 },
+      redisUrl: "redis://redis:6379",
+      timing: { pollMs: 250, rosterMs: 1000 },
     });
   });
 
@@ -43,6 +51,9 @@ describe("loadConfig", () => {
     ["SYNCBOARD_PORT", "70000"],
     ["SYNCBOARD_SHUTDOWN_GRACE_MS", "soon"],
     ["SYNCBOARD_MAX_BOARDS", "-3"],
+    ["SYNCBOARD_REDIS_URL", "localhost:6379"],
+    ["SYNCBOARD_REDIS_URL", "http://redis:6379"],
+    ["SYNCBOARD_POLL_MS", "often"],
   ])("refuses %s=%s", (name, value) => {
     expect(() => loadConfig({ [name]: value })).toThrow(name);
   });

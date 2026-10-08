@@ -6,6 +6,7 @@
     { "path": "./shared" },
     { "path": "./server" },
     { "path": "./client" },
-    { "path": "./e2e" }
+    { "path": "./e2e" },
+    { "path": "./bench" }
   ]
 }

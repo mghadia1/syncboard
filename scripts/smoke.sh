@@ -28,7 +28,7 @@ expect() { # expect NAME GOT WANT
 }
 ws() { node "$here/ws-check.mjs" "$ws_url" "$@"; }
 
-expect "health" "$(curl --fail --silent --show-error "$base_url/healthz")" '{"status":"ok","version":"0.1.0"}'
+expect "health" "$(curl --fail --silent --show-error "$base_url/healthz")" '{"status":"ok","version":"0.1.0","bus":"off"}'
 expect "health HEAD" "$(status --head "$base_url/healthz")" "200"
 expect "health wrong method" "$(status -X POST "$base_url/healthz")" "405"
 expect "health wrong method Allow" "$(header allow -X POST "$base_url/healthz")" "GET, HEAD"
