@@ -8,11 +8,12 @@ It deliberately does not use Yjs, Automerge, Liveblocks, Socket.IO,
 tldraw, Excalidraw, Konva or Fabric: the point is to build the sync (a CRDT
 for the board, and a WebSocket protocol to carry it) and the drawing.
 
-> **Status:** Milestones 0-1 of 7. The board exists as a CRDT in the shared
-> package, tested to converge however its operations are ordered,
-> repeated or split; the server answers a health check, serves the client
-> and greets it over a WebSocket. Nothing uses the board yet: there is no
-> drawing (Milestone 2) and no sync over the network (Milestone 3).
+> **Status:** Milestones 0-2 of 7. One person can draw: shapes, arrows,
+> freehand, sticky notes; select, move, resize, recolor, restack, delete;
+> pan and zoom; undo and redo. Every change goes through the board's CRDT,
+> tested to converge however its operations are ordered, repeated or
+> split. **Nothing is shared yet:** each browser has its own board, and a
+> reload empties it, until sync (Milestone 3).
 >
 > TypeScript is the language I am learning on this project (built with
 > Claude): it is not on my resume until I can write and explain it unaided.
@@ -23,7 +24,7 @@ for the board, and a WebSocket protocol to carry it) and the drawing.
 |---|-----------|--------|
 | 0 | Skeleton: npm workspaces (shared, server, client), strict TypeScript, ESLint, Vitest; a Node server with `/healthz`, graceful shutdown and a typed WebSocket hello; React (Vite, TypeScript) shell served by the server; one-container Compose; CI | Done |
 | 1 | The board as a CRDT in `shared`: last-writer-wins properties ordered by (Lamport clock, client id), tombstones, fractional indexes; property tests that any order, duplication or split of the operations converges | Done |
-| 2 | Drawing, one person: shapes, freehand, sticky notes; select, move, resize, delete; pan and zoom; undo and redo, all through the CRDT | Not started |
+| 2 | Drawing, one person: shapes, freehand, sticky notes; select, move, resize, delete; pan and zoom; undo and redo, all through the CRDT | Done |
 | 3 | Realtime sync: rooms, a snapshot on joining, operations relayed and acknowledged, reconnection that resends, offline edits merged | Not started |
 | 4 | Presence (cursors, selections, who is here) and undo of only your own changes | Not started |
 | 5 | Persistence: an operation log and snapshots per board; SIGKILL test | Not started |
@@ -68,6 +69,52 @@ browser ──► {"type": "hello", "protocol": 1}
   with **1007**, and the server carries on.
 - On shutdown every open client gets **1001** ("server shutting down"); a
   client that does not finish closing within 5 s is cut off.
+
+## Drawing
+
+The board fills the window; the marker tray along the bottom holds the
+tools, the colors (each drawn as a marker cap; the chosen one is lifted),
+Fill, Undo and Redo, and, with something selected, Bring to front, Send
+to back and Delete.
+
+| Key | Does |
+|-----|------|
+| V, H | Select; pan |
+| R, O, A, P, N | Rectangle, ellipse, arrow, pen, note: drag to draw, or click for a default size |
+| Space (held), middle button | Pan, with any tool |
+| Wheel, trackpad scroll | Pan |
+| Ctrl/Cmd + wheel | Zoom around the pointer (10% to 800%); + and - zoom around the centre |
+| Click, Shift+click, drag on empty board | Select one; add or remove one; select what the drag encloses |
+| Drag a shape, a corner, an arrow's end | Move; resize; move that end |
+| Arrows (Shift: by 10) | Nudge the selection |
+| ] and [ | Bring to front; send to back |
+| Delete or Backspace, Escape, Ctrl/Cmd+A | Delete; clear the selection; select all |
+| Enter or double-click on a note | Edit its text (Escape or Ctrl/Cmd+Enter to finish); the note grows to fit |
+| Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl+Y | Undo; redo |
+
+- **Every change is an operation on the replica,** the same kind other
+  browsers will receive in Milestone 3: a drag sends one per pointer move,
+  a note one per keystroke.
+- **Undo makes new edits.** It sets the changed properties back to the
+  values they had, with new stamps; it rewinds nothing. A gesture (a
+  drag, a resize, a typing session) is one undo step however many
+  operations it made, and cancelling one (Escape, a lost pointer) puts
+  things back without leaving a step. Undo knows only this browser's
+  changes; what it should do once other people's edits are mixed in is
+  Milestone 4.
+- **A click is not an edit.** Gestures that change shapes start only after
+  the pointer moves 4 pixels, so selecting a shape sends nothing and
+  leaves nothing to undo.
+- A shape being drawn, or a pen stroke, is a preview until the pointer
+  is released, and then one operation: others will see strokes appear
+  whole, not as they are drawn.
+
+What it does **not** do yet: rotate, copy and paste, text in shapes other
+than notes, resize several shapes at once, pinch-zoom on a touch screen,
+or let a screen reader explore the shapes (it hears how many there are,
+and what each action did). It uses pointer events, which cover touch and
+pens as well as mice, but only a mouse and a trackpad have been tried; a
+trackpad pinch was not tested.
 
 ## How the board stays the same everywhere
 
@@ -198,9 +245,15 @@ make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
 | `server/src/main.ts` | Startup, and shutting down on SIGTERM and SIGINT |
 | `server/src/healthcheck.ts` | Docker's health check (the image has no curl) |
 | `client/src/connection.ts` | Opening the WebSocket and saying hello |
-| `client/src/App.tsx` | The page |
+| `client/src/App.tsx` | The page: the masthead, the connection, the whiteboard |
+| `client/src/board/editor.ts` | The board as the page edits it: the replica, undo and redo, gestures grouped into steps |
+| `client/src/board/geometry.ts` | Viewport, hit testing, resizing: plain functions |
+| `client/src/canvas/Whiteboard.tsx` | Tool, color, selection, viewport, keyboard shortcuts |
+| `client/src/canvas/Board.tsx` | The SVG board and every pointer gesture |
+| `client/src/canvas/ShapeView.tsx`, `NoteEditor.tsx`, `Toolbar.tsx` | Drawing a shape; typing in a note; the marker tray |
 | `server/src/app.test.ts` | HTTP, path traversal, the protocol, shutdown |
 | `client/src/App.test.tsx` | The page against a fake WebSocket |
+| `client/src/canvas/Whiteboard.test.tsx` | Drawing, selecting, editing, undo, pan and zoom, through pointer and key events |
 | `scripts/smoke.sh`, `scripts/ws-check.mjs` | Checks a running container from outside |
 
 ## Decisions so far
@@ -259,6 +312,16 @@ make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
 - **Order keys go on top by raising the last digit,** not by midpoint:
   after 1,000 shapes added on top, keys are 17 characters long instead of
   201 (measured).
+- **SVG, not a canvas element.** React draws each shape as an element,
+  which is simple and fast enough for hundreds of shapes; a canvas would
+  win for many thousands. Hit testing is done by plain functions
+  (`geometry.ts`) rather than the browser, so it is tested without one.
+- **The editor is not React.** `Editor` (replica, undo, redo) is a plain
+  class the page subscribes to with `useSyncExternalStore`; it is tested
+  directly, and Milestone 3 can feed it remote operations the same way.
+- **Two typefaces, bundled:** Atkinson Hyperlegible Next for the interface
+  and Shantell Sans for notes and the name, so a self-hosted board makes
+  no requests to a font service.
 - **Not yet:** authentication, boards, and an `Origin` check on the
   WebSocket. Anyone who can reach the port can connect and say hello,
   which is all there is to do so far.
@@ -294,3 +357,24 @@ make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
    `keys[i - 1] ?? "" < key`, which JavaScript reads as
    `keys[i - 1] ?? ("" < key)`: always truthy. Caught on reading it before
    the first run; it now has parentheses.
+5. **A click was an edit.** Pressing on a shape started a move that sent
+   an update even if the pointer never moved, so every click to select
+   something left a "Move shape" in the undo history (and, with sync,
+   would have been sent to everyone). Found while working out why a test
+   failed; gestures now wait for 4 pixels of movement.
+6. **Grabbing a handle off-centre resized the shape.** A corner handle
+   answers within 9 pixels, and the corner jumped to the pointer, so a
+   press and release a few pixels off changed the size. The grabbed point
+   now keeps its offset from the pointer. Each of these two has a test
+   that fails without its fix.
+7. **Notes cut their text off.** In the browser, text longer than a small
+   note was hidden mid-word, with nothing to say so (jsdom does no layout,
+   so the tests could not see it). The note now grows to fit as it is
+   typed in, and the text box is laid out exactly like the note (an
+   outline instead of a border), so the text wraps the same while editing
+   and after.
+8. **The README promised what the code did not do.** Checking it line by
+   line against the code before committing: "Escape cancels a gesture"
+   was untrue (Escape only cleared the selection), and "pinch zooms" and
+   "touch can draw" had never been tried. Escape now cancels a drag, with
+   a test that fails without it; the other two claims were taken out.

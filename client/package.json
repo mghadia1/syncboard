@@ -9,6 +9,8 @@
     "build": "vite build"
   },
   "devDependencies": {
+    "@fontsource-variable/atkinson-hyperlegible-next": "^5.3.0",
+    "@fontsource-variable/shantell-sans": "^5.3.0",
     "@syncboard/shared": "0.1.0",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",

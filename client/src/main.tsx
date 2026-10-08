@@ -1,6 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import "@fontsource-variable/atkinson-hyperlegible-next";
+import "@fontsource-variable/shantell-sans";
 import "./index.css";
 
 const root = document.getElementById("root");

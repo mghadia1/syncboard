@@ -402,3 +402,13 @@ describe("properties", () => {
     );
   });
 });
+
+describe("values", () => {
+  test("reads the current value of each named property it knows", () => {
+    const a = new Replica("a");
+    const id = a.create(box).shape;
+    a.update(id, { x: 4 });
+    expect(a.values(id, ["x", "stroke", "deleted"])).toEqual({ x: 4, stroke: "ink", deleted: false });
+    expect(a.values("unknown", ["x"])).toEqual({});
+  });
+});

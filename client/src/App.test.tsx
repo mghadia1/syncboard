@@ -56,7 +56,7 @@ describe("the connection badge", () => {
   test("says hello once the socket opens, and shows the server's welcome", () => {
     const { socket } = setup();
     expect(socket.url).toBe("ws://board.test/ws");
-    expect(screen.getByRole("status")).toHaveTextContent("Connecting…");
+    expect(screen.getByRole("status", { name: "Connection" })).toHaveTextContent("Connecting…");
 
     socket.open();
     expect(socket.sent.map((frame) => JSON.parse(frame) as unknown)).toEqual([
@@ -64,7 +64,7 @@ describe("the connection badge", () => {
     ]);
 
     socket.receive({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.1.0" });
-    expect(screen.getByRole("status")).toHaveTextContent("Connected server 0.1.0");
+    expect(screen.getByRole("status", { name: "Connection" })).toHaveTextContent("Connected server 0.1.0");
   });
 
   test("shows why the server refused, even after it closes the socket", () => {
@@ -72,14 +72,14 @@ describe("the connection badge", () => {
     socket.open();
     socket.receive({ type: "error", code: "unsupported_protocol", message: "speak protocol 2" });
     socket.serverClose(4001);
-    expect(screen.getByRole("status")).toHaveTextContent("Refused speak protocol 2");
+    expect(screen.getByRole("status", { name: "Connection" })).toHaveTextContent("Refused speak protocol 2");
   });
 
   test("does not trust what the server sends", () => {
     const { socket } = setup();
     socket.open();
     socket.receive("not json");
-    expect(screen.getByRole("status")).toHaveTextContent("the server sent something unreadable");
+    expect(screen.getByRole("status", { name: "Connection" })).toHaveTextContent("the server sent something unreadable");
     expect(socket.closedWith).toBe(1000);
   });
 
@@ -88,7 +88,7 @@ describe("the connection badge", () => {
     socket.open();
     socket.receive({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.1.0" });
     socket.serverClose(1001);
-    expect(screen.getByRole("status")).toHaveTextContent("Disconnected");
+    expect(screen.getByRole("status", { name: "Connection" })).toHaveTextContent("Disconnected");
   });
 
   test("closes the socket when the page goes away", () => {

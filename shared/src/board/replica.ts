@@ -158,6 +158,23 @@ export class Replica {
   }
 
   /**
+   * The current value of each named property of a shape, leaving out the
+   * ones this replica has never heard of: what an undo needs to put back.
+   */
+  values(id: ShapeId, names: Iterable<PropName>): Partial<ShapeProps> {
+    const state = this.#shapes.get(id);
+    const values: Partial<Record<PropName, unknown>> = {};
+    for (const name of names) {
+      const entry = state?.[name];
+      if (entry) {
+        values[name] = entry.value;
+      }
+    }
+    // Each value came from its own property's register.
+    return values as Partial<ShapeProps>;
+  }
+
+  /**
    * Applies an operation from anywhere, and moves the clock past it, so
    * the next edit made here is later than everything seen so far. Returns
    * whether anything changed.
@@ -214,18 +231,23 @@ export class Replica {
   }
 
   update(id: ShapeId, change: ShapeChange): Operation {
-    if (Object.keys(change).length === 0) {
-      throw new RangeError("an update must change something");
-    }
-    return this.#local(id, this.#tick(), change);
+    return this.set(id, change);
   }
 
   delete(id: ShapeId): Operation {
-    return this.#local(id, this.#tick(), { deleted: true });
+    return this.set(id, { deleted: true });
   }
 
   restore(id: ShapeId): Operation {
-    return this.#local(id, this.#tick(), { deleted: false });
+    return this.set(id, { deleted: false });
+  }
+
+  /** Any properties at all, with a new stamp: what undo and redo use. */
+  set(id: ShapeId, props: Partial<ShapeProps>): Operation {
+    if (Object.keys(props).length === 0) {
+      throw new RangeError("an update must change something");
+    }
+    return this.#local(id, this.#tick(), props);
   }
 
   #tick(): Stamp {

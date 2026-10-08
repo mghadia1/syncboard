@@ -1,3 +1,6 @@
+import { useState } from "react";
+import { Editor } from "./board/editor";
+import { Whiteboard } from "./canvas/Whiteboard";
 import { type Connection, type CreateSocket, socketUrl, useConnection } from "./connection";
 
 function ConnectionBadge({ connection }: { connection: Connection }) {
@@ -25,19 +28,18 @@ function ConnectionBadge({ connection }: { connection: Connection }) {
   }
 }
 
-export function App({ url, create }: { url?: string; create?: CreateSocket }) {
+export function App({ url, create, editor }: { url?: string; create?: CreateSocket; editor?: Editor }) {
   const connection = useConnection(url ?? socketUrl(), create);
+  const [board] = useState(() => editor ?? new Editor());
   return (
     <div className="app">
-      <header className="bar">
+      <header className="masthead">
         <h1 className="wordmark">SyncBoard</h1>
-        <div role="status" aria-live="polite">
+        <div role="status" aria-live="polite" aria-label="Connection">
           <ConnectionBadge connection={connection} />
         </div>
       </header>
-      <main className="board" aria-label="Board">
-        <p className="empty">Nothing to draw on yet.</p>
-      </main>
+      <Whiteboard editor={board} />
     </div>
   );
 }
