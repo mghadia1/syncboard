@@ -1,6 +1,7 @@
 export {
   CloseCode,
   MAX_MESSAGE_BYTES,
+  MAX_OPS_PER_MESSAGE,
   PROTOCOL_VERSION,
   parseClientMessage,
   parseServerMessage,

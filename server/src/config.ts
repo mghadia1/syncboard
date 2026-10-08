@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_LIMITS, type Limits } from "./rooms.js";
 
 export type Config = {
   host: string;
@@ -8,6 +9,9 @@ export type Config = {
   clientDir: string;
   /** How long open connections get to close before the server stops anyway. */
   shutdownGraceMs: number;
+  /** How often connections are pinged; one that has not answered by the next ping is cut off. */
+  heartbeatMs: number;
+  limits: Limits;
 };
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -35,5 +39,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port,
     clientDir: path.resolve(env.SYNCBOARD_CLIENT_DIR ?? path.join(here, "../../client/dist")),
     shutdownGraceMs: integer(env, "SYNCBOARD_SHUTDOWN_GRACE_MS", 5000),
+    heartbeatMs: Math.max(100, integer(env, "SYNCBOARD_HEARTBEAT_MS", 30_000)),
+    limits: {
+      maxBoards: Math.max(1, integer(env, "SYNCBOARD_MAX_BOARDS", DEFAULT_LIMITS.maxBoards)),
+      maxShapes: Math.max(1, integer(env, "SYNCBOARD_MAX_SHAPES", DEFAULT_LIMITS.maxShapes)),
+    },
   };
 }

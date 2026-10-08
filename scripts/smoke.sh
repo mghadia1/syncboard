@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Checks a running Compose stack from outside, over real HTTP and
-# WebSockets: the health endpoint, the built client and its bundle, that no
-# path reaches files outside the client's assets, JSON 404s and 405s with
-# Allow, the WebSocket hello and its refusals (a server that survives an
-# oversized frame), that the container runs unprivileged and healthy, and
+# WebSockets: the health endpoint, the built client and its bundle, board
+# links, that no path reaches files outside the client's assets, JSON 404s
+# and 405s with Allow, the WebSocket hello and its refusals (a server that
+# survives an oversized frame), edits relayed between two clients on one
+# board, that the container runs unprivileged and healthy, and
 # that `docker compose stop` shuts it down cleanly: open clients told 1001,
 # exit code 0, well inside the grace period.
 #
@@ -53,10 +54,14 @@ expect "unknown path" "$(status "$base_url/nope")" "404"
 expect "unknown path is JSON" "$(curl --silent "$base_url/nope")" '{"error":"not found"}'
 expect "/ws over plain HTTP" "$(status "$base_url/ws")" "426"
 
+expect "a board's link serves the page" "$(status "$base_url/b/AbC123xyz")" "200"
+expect "a malformed board link" "$(status "$base_url/b/x")" "404"
+
 expect "ws hello" "$(ws hello)" "welcome"
 expect "ws other protocol closes with" "$(ws protocol)" "4001"
 expect "ws oversized frame closes with" "$(ws oversized)" "1009"
 expect "ws still answering after that" "$(ws hello)" "welcome"
+expect "ws edits relayed, acknowledged, in a later joiner's snapshot" "$(ws relay)" "relayed"
 
 expect "runs as uid" "$(docker compose exec -T syncboard id -u)" "1000"
 expect "container health" "$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q syncboard)")" "healthy"

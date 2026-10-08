@@ -1,0 +1,15 @@
+{
+  // The end-to-end tests run the server and the browser's sync code in one
+  // Node process, so they see both: Node's types and the DOM's.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "tsBuildInfoFile": "../node_modules/.tmp/e2e.tsbuildinfo",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["node"]
+  },
+  "include": ["."],
+  "references": [{ "path": "../shared/tsconfig.build.json" }]
+}

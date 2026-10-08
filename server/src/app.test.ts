@@ -9,6 +9,7 @@ import WebSocket from "ws";
 import { type App, createApp } from "./app.js";
 import type { Config } from "./config.js";
 import { silentLog } from "./log.js";
+import { DEFAULT_LIMITS } from "./rooms.js";
 import { VERSION } from "./version.js";
 
 const SECRET = "the server's own files must never be served";
@@ -40,6 +41,8 @@ async function start(config: Partial<Config> = {}): Promise<{ app: App; port: nu
       port: 0,
       clientDir: config.clientDir ?? (await clientDir()),
       shutdownGraceMs: 2000,
+      heartbeatMs: 30_000,
+      limits: DEFAULT_LIMITS,
       ...config,
     },
     silentLog,
@@ -108,6 +111,14 @@ describe("HTTP", () => {
     const post = await raw(port, "/healthz", "POST");
     expect(post.status).toBe(405);
     expect(post.headers.allow).toBe("GET, HEAD");
+  });
+
+  test("a board's link serves the page too; a malformed one does not", async () => {
+    const { port } = await start();
+    expect((await raw(port, "/b/AbC123xyz")).status).toBe(200);
+    expect((await raw(port, "/b/AbC123xyz")).body).toContain('<div id="root">');
+    expect((await raw(port, "/b/abc")).status).toBe(404);
+    expect((await raw(port, "/b/AbC123xyz/more")).status).toBe(404);
   });
 
   test("serves index.html at / without long-term caching", async () => {
@@ -180,8 +191,14 @@ describe("WebSocket", () => {
     const { port } = await start();
     const ws = await connect(port);
     const reply = nextMessage(ws);
-    ws.send(JSON.stringify({ type: "hello", protocol: PROTOCOL_VERSION }));
-    expect(await reply).toEqual({ type: "welcome", protocol: PROTOCOL_VERSION, version: VERSION });
+    ws.send(JSON.stringify({ type: "hello", protocol: PROTOCOL_VERSION, board: "board01", client: "c1" }));
+    expect(await reply).toMatchObject({
+      type: "welcome",
+      protocol: PROTOCOL_VERSION,
+      version: VERSION,
+      board: "board01",
+      snapshot: [],
+    });
     ws.close();
   });
 
@@ -228,7 +245,7 @@ describe("WebSocket", () => {
     // Found by this test: unhandled, ws's "error" event crashed the server.
     const next = await connect(port);
     const reply = nextMessage(next);
-    next.send(JSON.stringify({ type: "hello", protocol: PROTOCOL_VERSION }));
+    next.send(JSON.stringify({ type: "hello", protocol: PROTOCOL_VERSION, board: "board01", client: "c2" }));
     expect(await reply).toMatchObject({ type: "welcome" });
     next.close();
   });

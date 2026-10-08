@@ -307,3 +307,21 @@ test("the board says how to start when it is empty", () => {
   setup();
   expect(screen.getByText(/Choose a tool below/)).toBeInTheDocument();
 });
+
+test("if someone else deletes the note being typed in, the typing ends", () => {
+  const { canvas, editor } = setup();
+  let id = "";
+  act(() => {
+    id = editor.create({ kind: "note", x: 0, y: 0, w: 200, h: 160, fill: "yellow" });
+  });
+  fireEvent.doubleClick(canvas, { clientX: 50, clientY: 50 });
+  expect(screen.getByRole("textbox", { name: "Note text" })).toBeInTheDocument();
+  const other = new Replica("other");
+  act(() => {
+    editor.applyRemote([{ shape: id, stamp: { counter: 99, client: other.client }, set: { deleted: true } }]);
+  });
+  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(editor.inGesture).toBe(false);
+  key("r"); // shortcuts work again
+  expect(pressed("Rectangle")).toBe("true");
+});

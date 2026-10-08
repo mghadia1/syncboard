@@ -1,21 +1,19 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
-import {
-  CloseCode,
-  MAX_MESSAGE_BYTES,
-  PROTOCOL_VERSION,
-  type ServerMessage,
-  parseClientMessage,
-} from "@syncboard/shared";
-import { type RawData, type WebSocket, WebSocketServer } from "ws";
+import { CloseCode, MAX_MESSAGE_BYTES } from "@syncboard/shared";
+import { type WebSocket, WebSocketServer } from "ws";
 import type { Config } from "./config.js";
 import type { Log } from "./log.js";
+import { Rooms } from "./rooms.js";
 import { serveClient } from "./static.js";
+import { handleConnection } from "./sync.js";
 import { VERSION } from "./version.js";
 
 export type App = {
   server: http.Server;
+  /** The boards held in memory (tests look inside). */
+  rooms: Rooms;
   /** Starts listening; resolves to the port (useful with port 0). */
   listen(): Promise<number>;
   /**
@@ -41,20 +39,6 @@ function json(
   res.end(text);
 }
 
-function send(ws: WebSocket, message: ServerMessage): void {
-  ws.send(JSON.stringify(message));
-}
-
-function text(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}
-
 /** Refuses an upgrade with a plain HTTP answer, then hangs up. */
 function refuse(socket: Duplex, status: number, reason: string): void {
   socket.end(`HTTP/1.1 ${String(status)} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
@@ -62,7 +46,24 @@ function refuse(socket: Duplex, status: number, reason: string): void {
 
 export function createApp(config: Config, log: Log): App {
   const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
+  const rooms = new Rooms(config.limits);
   let closing: Promise<void> | undefined;
+
+  // A connection that stops answering pings (a laptop that slept, a cable
+  // pulled) is cut off at the next ping, rather than kept forever.
+  const alive = new WeakMap<WebSocket, boolean>();
+  const heartbeat = setInterval(() => {
+    for (const ws of sockets.clients) {
+      if (alive.get(ws) === false) {
+        log("client unresponsive", {});
+        ws.terminate();
+        continue;
+      }
+      alive.set(ws, false);
+      ws.ping();
+    }
+  }, config.heartbeatMs);
+  heartbeat.unref();
 
   const server = http.createServer((req, res) => {
     const url = URL.parse(req.url ?? "", "http://localhost");
@@ -122,32 +123,9 @@ export function createApp(config: Config, log: Log): App {
     ws.on("error", (error) => {
       log("client error", { error: error.message });
     });
-    ws.on("message", (data, isBinary) => {
-      if (isBinary) {
-        send(ws, { type: "error", code: "bad_message", message: "binary frames are not used" });
-        ws.close(CloseCode.BadMessage, "binary frame");
-        return;
-      }
-      const parsed = parseClientMessage(text(data));
-      if (!parsed.ok) {
-        send(ws, { type: "error", code: "bad_message", message: parsed.error });
-        ws.close(CloseCode.BadMessage, "bad message");
-        return;
-      }
-      // A hello is the only client message so far; the board's own
-      // messages, and a switch over them, come with sync (Milestone 3).
-      const hello = parsed.message;
-      if (hello.protocol !== PROTOCOL_VERSION) {
-        send(ws, {
-          type: "error",
-          code: "unsupported_protocol",
-          message: `this server speaks protocol ${String(PROTOCOL_VERSION)}, not ${String(hello.protocol)}`,
-        });
-        ws.close(CloseCode.UnsupportedProtocol, "unsupported protocol");
-        return;
-      }
-      send(ws, { type: "welcome", protocol: PROTOCOL_VERSION, version: VERSION });
-    });
+    alive.set(ws, true);
+    ws.on("pong", () => alive.set(ws, true));
+    handleConnection(ws, rooms, log);
     ws.on("close", (code) => {
       log("client disconnected", { code, clients: sockets.clients.size });
     });
@@ -155,6 +133,7 @@ export function createApp(config: Config, log: Log): App {
 
   return {
     server,
+    rooms,
     listen() {
       return new Promise((resolve, reject) => {
         server.once("error", reject);
@@ -166,6 +145,7 @@ export function createApp(config: Config, log: Log): App {
     },
     close() {
       closing ??= new Promise<void>((resolve) => {
+        clearInterval(heartbeat);
         const grace = setTimeout(() => {
           for (const ws of sockets.clients) {
             ws.terminate();

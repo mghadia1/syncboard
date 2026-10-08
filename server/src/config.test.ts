@@ -18,8 +18,18 @@ describe("loadConfig", () => {
         SYNCBOARD_PORT: "9000",
         SYNCBOARD_CLIENT_DIR: "/srv/client",
         SYNCBOARD_SHUTDOWN_GRACE_MS: "100",
+        SYNCBOARD_HEARTBEAT_MS: "5000",
+        SYNCBOARD_MAX_BOARDS: "3",
+        SYNCBOARD_MAX_SHAPES: "50",
       }),
-    ).toEqual({ host: "127.0.0.1", port: 9000, clientDir: "/srv/client", shutdownGraceMs: 100 });
+    ).toEqual({
+      host: "127.0.0.1",
+      port: 9000,
+      clientDir: "/srv/client",
+      shutdownGraceMs: 100,
+      heartbeatMs: 5000,
+      limits: { maxBoards: 3, maxShapes: 50 },
+    });
   });
 
   test.each([
@@ -28,6 +38,7 @@ describe("loadConfig", () => {
     ["SYNCBOARD_PORT", "-1"],
     ["SYNCBOARD_PORT", "70000"],
     ["SYNCBOARD_SHUTDOWN_GRACE_MS", "soon"],
+    ["SYNCBOARD_MAX_BOARDS", "-3"],
   ])("refuses %s=%s", (name, value) => {
     expect(() => loadConfig({ [name]: value })).toThrow(name);
   });

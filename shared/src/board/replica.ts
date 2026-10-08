@@ -1,6 +1,7 @@
 import type { Operation, ShapeId } from "./operation.js";
 import { keyAfter, keyBetween } from "./order.js";
 import { DEFAULTS, PROP_NAMES, type PropName, type ShapeProps } from "./shape.js";
+import { toOperations } from "./snapshot.js";
 import { type Stamp, compareStamps, isClientId, newClientId } from "./stamp.js";
 
 /**
@@ -200,7 +201,15 @@ export class Replica {
 
   /** Merges another replica's whole state into this one (a snapshot). */
   merge(state: BoardState): boolean {
-    let changed = false;
+    return this.absorb(state).length > 0;
+  }
+
+  /**
+   * Merges a whole state, and returns the part that was new here, as
+   * operations: what a server relays when someone uploads a board.
+   */
+  absorb(state: BoardState): Operation[] {
+    const changed: [ShapeId, PropName, Entry][] = [];
     for (const [id, other] of state) {
       let shape = this.#shapes.get(id);
       if (!shape) {
@@ -211,11 +220,13 @@ export class Replica {
         const entry = other[name];
         if (entry) {
           this.#clock = Math.max(this.#clock, entry.stamp.counter);
-          changed = offer(shape, name, entry) || changed;
+          if (offer(shape, name, entry)) {
+            changed.push([id, name, entry]);
+          }
         }
       }
     }
-    return changed;
+    return toOperations(changed);
   }
 
   /** A new shape, on top of every shape drawn here. */

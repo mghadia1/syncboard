@@ -34,6 +34,17 @@ export function isClientId(value: unknown): value is string {
   return typeof value === "string" && CLIENT_ID.test(value);
 }
 
+/**
+ * The highest counter accepted anywhere. Without a bound, one client could
+ * send 2^53 - 1, push every replica's clock to the end of the integers a
+ * double holds exactly, and break the ordering for everyone. Capped at
+ * 2^52, a clock pushed all the way up still has 2^52 (about 4.5 * 10^15)
+ * edits left. An absolute cap, not "so far ahead of the board": a busy
+ * board passes a million edits (every pointer move of a drag is one), and
+ * after a restart the server's copy starts again from nothing.
+ */
+export const MAX_COUNTER = 2 ** 52;
+
 export function isStamp(value: unknown): value is Stamp {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -41,10 +52,32 @@ export function isStamp(value: unknown): value is Stamp {
   const { counter, client } = value as Record<string, unknown>;
   return (
     typeof counter === "number" &&
-    Number.isSafeInteger(counter) &&
+    Number.isInteger(counter) &&
     counter > 0 &&
+    counter <= MAX_COUNTER &&
     isClientId(client)
   );
+}
+
+const BOARD_ID = /^[0-9A-Za-z_-]{6,64}$/;
+
+/** A board's id, as it appears in its link (/b/<id>). */
+export function isBoardId(value: unknown): value is string {
+  return typeof value === "string" && BOARD_ID.test(value);
+}
+
+const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+/**
+ * A new board id: 12 base-62 characters, about 71 random bits. Anyone with
+ * the link can open the board, so it must not be guessable.
+ */
+export function newBoardId(): string {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  // 256 is not a multiple of 62, so 0-7 come up slightly more often:
+  // 5.950 bits a character instead of 5.954, about 0.05 bits in all.
+  return Array.from(bytes, (byte) => BASE62[byte % 62] ?? "0").join("");
 }
 
 /**

@@ -1,45 +1,110 @@
-import { useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Editor } from "./board/editor";
 import { Whiteboard } from "./canvas/Whiteboard";
-import { type Connection, type CreateSocket, socketUrl, useConnection } from "./connection";
+import { type CreateSocket, Sync, type SyncStatus } from "./sync/sync";
+import { boardFromLocation, socketUrl } from "./sync/where";
 
-function ConnectionBadge({ connection }: { connection: Connection }) {
-  switch (connection.state) {
+function plural(n: number, one: string): string {
+  return `${String(n)} ${one}${n === 1 ? "" : "s"}`;
+}
+
+function StatusBadge({ status }: { status: SyncStatus }) {
+  switch (status.state) {
     case "connecting":
       return <span className="badge badge-waiting">Connecting…</span>;
-    case "connected":
+    case "online":
       return (
         <span className="badge badge-ok">
-          Connected <span className="badge-detail">server {connection.version}</span>
+          Connected{" "}
+          <span className="badge-detail">
+            {status.pending > 0 ? `sending ${plural(status.pending, "change")}` : `server ${status.version}`}
+          </span>
+        </span>
+      );
+    case "offline":
+      return (
+        <span className="badge badge-waiting">
+          Offline{" "}
+          <span className="badge-detail">
+            {status.pending > 0 ? `${plural(status.pending, "change")} waiting, ` : ""}reconnecting
+          </span>
         </span>
       );
     case "refused":
       return (
         <span className="badge badge-bad">
-          Refused <span className="badge-detail">{connection.reason}</span>
-        </span>
-      );
-    case "disconnected":
-      return (
-        <span className="badge badge-bad">
-          Disconnected <span className="badge-detail">reload to try again</span>
+          Refused <span className="badge-detail">{status.reason}</span>
         </span>
       );
   }
 }
 
-export function App({ url, create, editor }: { url?: string; create?: CreateSocket; editor?: Editor }) {
-  const connection = useConnection(url ?? socketUrl(), create);
-  const [board] = useState(() => editor ?? new Editor());
+export type AppProps = {
+  url?: string;
+  board?: string;
+  create?: CreateSocket;
+  editor?: Editor;
+  retry?: { firstMs: number; maxMs: number };
+};
+
+export function App({ url, board, create, editor, retry }: AppProps) {
+  const [session] = useState(() => {
+    const e = editor ?? new Editor();
+    const sync = new Sync({
+      editor: e,
+      board: board ?? boardFromLocation(),
+      url: url ?? socketUrl(),
+      ...(create ? { createSocket: create } : {}),
+      ...(retry ? { retry } : {}),
+    });
+    return { editor: e, sync };
+  });
+  const status = useSyncExternalStore(session.sync.subscribe, session.sync.getStatus);
+  const [copied, setCopied] = useState("");
+
+  useEffect(() => {
+    session.sync.start();
+    return () => {
+      session.sync.stop();
+    };
+  }, [session]);
+
+  function copyLink() {
+    const say = (text: string) => {
+      setCopied(text);
+      setTimeout(() => {
+        setCopied("");
+      }, 2500);
+    };
+    // The clipboard API exists only on HTTPS and localhost; a board on a
+    // LAN address is plain HTTP.
+    const clipboard = (navigator as Partial<Navigator>).clipboard;
+    if (!clipboard) {
+      say("Copy the address bar");
+      return;
+    }
+    clipboard.writeText(window.location.href).then(
+      () => {
+        say("Link copied");
+      },
+      () => {
+        say("Copy the address bar");
+      },
+    );
+  }
+
   return (
     <div className="app">
       <header className="masthead">
         <h1 className="wordmark">SyncBoard</h1>
         <div role="status" aria-live="polite" aria-label="Connection">
-          <ConnectionBadge connection={connection} />
+          <StatusBadge status={status} />
         </div>
+        <button type="button" className="copy-link" onClick={copyLink} title="Anyone with the link can draw on this board">
+          {copied || "Copy link"}
+        </button>
       </header>
-      <Whiteboard editor={board} />
+      <Whiteboard editor={session.editor} />
     </div>
   );
 }

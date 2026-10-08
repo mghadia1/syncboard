@@ -278,6 +278,20 @@ button {
   font-weight: 400;
 }
 
+.copy-link {
+  padding: 4px 10px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  background: var(--tray);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.copy-link:hover {
+  background: var(--chrome);
+}
+
 .zoom {
   position: absolute;
   top: 12px;
@@ -441,7 +455,8 @@ button {
     max-width: none;
   }
 
-  .masthead .badge-detail {
+  .masthead .badge-detail,
+  .masthead .wordmark {
     display: none;
   }
 }

@@ -7,20 +7,55 @@
  * Everything that arrives over the wire is `unknown` until it has been
  * checked: the parse functions below are the only way to get a typed
  * message, and they never trust the sender.
+ *
+ *   browser                                   server
+ *   hello {board, client}           ───►
+ *                                   ◄───      welcome {epoch, snapshot}
+ *   state {snapshot}  (if the epoch is new)   ───►
+ *   ops [...]  (its own edits)      ───►      relayed as ops to the others
+ *                                   ◄───      ack {upTo}
+ *                                   ◄───      ops [...] (the others' edits)
  */
+import { type Operation, parseOperation } from "./board/operation.js";
+import { type Snapshot, parseSnapshot } from "./board/snapshot.js";
+import { isBoardId, isClientId } from "./board/stamp.js";
 
 /** Raised whenever a message's meaning changes; a mismatch is refused. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
-/** The largest frame either side accepts, in bytes. */
+/** The largest frame the server accepts, in bytes. */
 export const MAX_MESSAGE_BYTES = 1024 * 1024;
 
-export type ClientMessage = { type: "hello"; protocol: number };
+/** The most operations in one `ops` message. */
+export const MAX_OPS_PER_MESSAGE = 1000;
 
-export type ErrorCode = "bad_message" | "unsupported_protocol";
+export type ClientMessage =
+  /** Join a board, as a replica. Must come first, once. */
+  | { type: "hello"; protocol: number; board: string; client: string }
+  /** Edits made by this replica, in the order it made them. */
+  | { type: "ops"; ops: readonly Operation[] }
+  /** (Part of) everything this replica knows: sent when the server's board is new to it. */
+  | { type: "state"; snapshot: Snapshot };
+
+export type ErrorCode =
+  | "bad_message"
+  | "unsupported_protocol"
+  | "not_joined"
+  | "bad_operation"
+  | "not_yours"
+  | "board_limit";
 
 export type ServerMessage =
-  | { type: "welcome"; protocol: number; version: string }
+  /**
+   * Joined. `epoch` names this copy of the board on the server: if a
+   * replica saw a different one before, the server has lost what it knew
+   * (a restart), and the replica uploads its state.
+   */
+  | { type: "welcome"; protocol: number; version: string; board: string; epoch: string; snapshot: Snapshot }
+  /** Other replicas' edits. */
+  | { type: "ops"; ops: readonly Operation[] }
+  /** Every edit of yours with a counter up to this one has been applied. */
+  | { type: "ack"; upTo: number }
   | { type: "error"; code: ErrorCode; message: string };
 
 /** WebSocket close codes this protocol uses (4000-4999 are for applications). */
@@ -31,6 +66,10 @@ export const CloseCode = {
   BadMessage: 1008,
   /** The client speaks a different protocol version. */
   UnsupportedProtocol: 4001,
+  /** An operation was refused (malformed, or not the sender's). */
+  BadOperation: 4002,
+  /** The server has as many boards, or the board as many shapes, as it allows. */
+  BoardLimit: 4003,
 } as const;
 
 export type Parsed<T> = { ok: true; message: T } | { ok: false; error: string };
@@ -57,10 +96,29 @@ function isProtocol(value: unknown): value is number {
 const ERROR_CODES: ReadonlySet<string> = new Set<ErrorCode>([
   "bad_message",
   "unsupported_protocol",
+  "not_joined",
+  "bad_operation",
+  "not_yours",
+  "board_limit",
 ]);
 
 function isErrorCode(value: unknown): value is ErrorCode {
   return typeof value === "string" && ERROR_CODES.has(value);
+}
+
+function parseOps(value: unknown): Parsed<Operation[]> {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_OPS_PER_MESSAGE) {
+    return { ok: false, error: `ops must be 1 to ${String(MAX_OPS_PER_MESSAGE)} operations` };
+  }
+  const ops: Operation[] = [];
+  for (const [i, item] of (value as unknown[]).entries()) {
+    const parsed = parseOperation(item);
+    if (!parsed.ok) {
+      return { ok: false, error: `operation ${String(i)}: ${parsed.error}` };
+    }
+    ops.push(parsed.message);
+  }
+  return { ok: true, message: ops };
 }
 
 /**
@@ -77,7 +135,28 @@ export function parseClientMessage(text: string): Parsed<ClientMessage> {
       if (!isProtocol(fields.protocol)) {
         return { ok: false, error: "hello needs a positive integer protocol" };
       }
-      return { ok: true, message: { type: "hello", protocol: fields.protocol } };
+      // An old client's hello has no board: let it through, so the server
+      // can say which protocol it speaks rather than "bad message".
+      if (fields.protocol === PROTOCOL_VERSION && (!isBoardId(fields.board) || !isClientId(fields.client))) {
+        return { ok: false, error: "hello needs a board id and a client id" };
+      }
+      return {
+        ok: true,
+        message: {
+          type: "hello",
+          protocol: fields.protocol,
+          board: typeof fields.board === "string" ? fields.board : "",
+          client: typeof fields.client === "string" ? fields.client : "",
+        },
+      };
+    case "ops": {
+      const ops = parseOps(fields.ops);
+      return ops.ok ? { ok: true, message: { type: "ops", ops: ops.message } } : ops;
+    }
+    case "state": {
+      const snapshot = parseSnapshot(fields.snapshot);
+      return snapshot.ok ? { ok: true, message: { type: "state", snapshot: snapshot.message } } : snapshot;
+    }
     default:
       return { ok: false, error: `unknown message type ${JSON.stringify(fields.type)}` };
   }
@@ -90,22 +169,46 @@ export function parseServerMessage(text: string): Parsed<ServerMessage> {
     return { ok: false, error: fields };
   }
   switch (fields.type) {
-    case "welcome":
-      if (!isProtocol(fields.protocol) || typeof fields.version !== "string") {
-        return { ok: false, error: "welcome needs a protocol and a version" };
+    case "welcome": {
+      if (
+        !isProtocol(fields.protocol) ||
+        typeof fields.version !== "string" ||
+        !isBoardId(fields.board) ||
+        typeof fields.epoch !== "string" ||
+        fields.epoch === ""
+      ) {
+        return { ok: false, error: "welcome needs a protocol, version, board and epoch" };
+      }
+      const snapshot = parseSnapshot(fields.snapshot);
+      if (!snapshot.ok) {
+        return snapshot;
       }
       return {
         ok: true,
-        message: { type: "welcome", protocol: fields.protocol, version: fields.version },
+        message: {
+          type: "welcome",
+          protocol: fields.protocol,
+          version: fields.version,
+          board: fields.board,
+          epoch: fields.epoch,
+          snapshot: snapshot.message,
+        },
       };
+    }
+    case "ops": {
+      const ops = parseOps(fields.ops);
+      return ops.ok ? { ok: true, message: { type: "ops", ops: ops.message } } : ops;
+    }
+    case "ack":
+      if (typeof fields.upTo !== "number" || !Number.isSafeInteger(fields.upTo) || fields.upTo < 1) {
+        return { ok: false, error: "ack needs a counter" };
+      }
+      return { ok: true, message: { type: "ack", upTo: fields.upTo } };
     case "error":
       if (!isErrorCode(fields.code) || typeof fields.message !== "string") {
         return { ok: false, error: "error needs a known code and a message" };
       }
-      return {
-        ok: true,
-        message: { type: "error", code: fields.code, message: fields.message },
-      };
+      return { ok: true, message: { type: "error", code: fields.code, message: fields.message } };
     default:
       return { ok: false, error: `unknown message type ${JSON.stringify(fields.type)}` };
   }

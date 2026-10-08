@@ -30,9 +30,28 @@ export function Whiteboard({ editor }: { editor: Editor }) {
   const [message, setMessage] = useState("");
   const area = useRef<HTMLDivElement>(null);
 
-  // A shape deleted (by undo, say) drops out of the selection.
+  // A shape deleted (by undo, or by someone else) drops out of the selection.
   const selection = chosen.filter((id) => shapes.some((shape) => shape.id === id));
   const note = editing === null ? undefined : shapes.find((shape) => shape.id === editing);
+
+  // If someone else deletes the note being typed in, the typing ends: its
+  // undo step is closed and the shortcuts work again.
+  const editingNow = useRef<ShapeId | null>(null);
+  useEffect(() => {
+    editingNow.current = editing;
+  });
+  useEffect(
+    () =>
+      editor.subscribe(() => {
+        const id = editingNow.current;
+        if (id !== null && !editor.replica.shape(id)) {
+          editingNow.current = null;
+          editor.commit();
+          setEditing(null);
+        }
+      }),
+    [editor],
+  );
 
   function announce(text: string) {
     setMessage(text);

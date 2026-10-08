@@ -154,3 +154,31 @@ test("subscribers hear about every change", () => {
   e.create(box);
   expect(heard).toBe(before);
 });
+
+describe("remote edits", () => {
+  test("are drawn, but not undoable and not sent", () => {
+    const { e, sent } = editor();
+    const other = new Replica("other");
+    const op = other.create({ kind: "rectangle", x: 0, y: 0, w: 5, h: 5 });
+    let heard = 0;
+    e.subscribe(() => heard++);
+    e.applyRemote([op]);
+    expect(ids(e)).toEqual([op.shape]);
+    expect(e.getSnapshot().undoLabel).toBeNull();
+    expect(sent).toEqual([]);
+    expect(heard).toBe(1);
+    e.applyRemote([op]); // nothing new: no change, no notification
+    expect(heard).toBe(1);
+  });
+
+  test("a merged snapshot moves the clock: the next local edit is later than everything in it", () => {
+    const { e, sent } = editor();
+    const other = new Replica("other");
+    for (let i = 0; i < 5; i++) {
+      other.create({ kind: "ellipse", x: i, y: 0, w: 5, h: 5 });
+    }
+    e.mergeRemote(other.state);
+    e.create({ kind: "rectangle", x: 0, y: 0, w: 5, h: 5 });
+    expect(sent[0]?.stamp.counter).toBe(6);
+  });
+});

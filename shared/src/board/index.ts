@@ -28,4 +28,23 @@ export {
   isPropName,
   isPropValue,
 } from "./shape.js";
-export { type Stamp, compareStamps, isClientId, isStamp, newClientId } from "./stamp.js";
+export {
+  type Snapshot,
+  type SnapshotEntry,
+  chunkSnapshot,
+  fromSnapshot,
+  highestCounter,
+  parseSnapshot,
+  toOperations,
+  toSnapshot,
+} from "./snapshot.js";
+export {
+  MAX_COUNTER,
+  type Stamp,
+  compareStamps,
+  isBoardId,
+  isClientId,
+  isStamp,
+  newBoardId,
+  newClientId,
+} from "./stamp.js";

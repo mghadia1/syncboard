@@ -1,4 +1,5 @@
 import {
+  type BoardState,
   MAX_COORDINATE,
   type NewShape,
   type Operation,
@@ -117,6 +118,27 @@ export class Editor {
 
   get inGesture(): boolean {
     return this.#open !== null;
+  }
+
+  /**
+   * Other replicas' operations: applied, and drawn, but not undoable here
+   * and not sent anywhere (they came from the network).
+   */
+  applyRemote(ops: readonly Operation[]): void {
+    let changed = false;
+    for (const op of ops) {
+      changed = this.replica.apply(op) || changed;
+    }
+    if (changed) {
+      this.#changed();
+    }
+  }
+
+  /** A whole board from the network (the server's snapshot), merged in. */
+  mergeRemote(state: BoardState): void {
+    if (this.replica.merge(state)) {
+      this.#changed();
+    }
   }
 
   create(shape: NewShape, label = `Add ${shape.kind}`): ShapeId {

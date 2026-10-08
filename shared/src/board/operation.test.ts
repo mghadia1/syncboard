@@ -19,8 +19,8 @@ describe("parseOperation", () => {
     ["counter zero", { shape: "s", stamp: { counter: 0, client: "a" }, set: { x: 1 } }, "bad stamp"],
     ["fractional counter", { shape: "s", stamp: { counter: 1.5, client: "a" }, set: { x: 1 } }, "bad stamp"],
     [
-      "counter past 2^53",
-      { shape: "s", stamp: { counter: 2 ** 53, client: "a" }, set: { x: 1 } },
+      "counter past 2^52",
+      { shape: "s", stamp: { counter: 2 ** 52 + 1, client: "a" }, set: { x: 1 } },
       "bad stamp",
     ],
     ["empty client", { shape: "s", stamp: { counter: 1, client: "" }, set: { x: 1 } }, "bad stamp"],

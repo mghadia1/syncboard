@@ -2,9 +2,11 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { isBoardId } from "@syncboard/shared";
 
 /**
- * Serves the built client: `/` is index.html, `/assets/<name>` a file from
+ * Serves the built client: `/` and every board's link (`/b/<id>`) are
+ * index.html, `/assets/<name>` a file from
  * assets/. Nothing else on disk is reachable: an asset name must be one plain
  * file name after decoding, so `..`, slashes (also percent-encoded ones) and
  * dot files are refused before any path is built.
@@ -76,7 +78,7 @@ export async function serveClient(
   pathname: string,
   clientDir: string,
 ): Promise<boolean> {
-  const isIndex = pathname === "/";
+  const isIndex = pathname === "/" || (pathname.startsWith("/b/") && isBoardId(pathname.slice(3)));
   if (!isIndex && !pathname.startsWith("/assets/")) {
     return false;
   }

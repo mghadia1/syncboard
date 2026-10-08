@@ -20,6 +20,17 @@ export default defineConfig({
         test: { name: "server", include: ["server/src/**/*.test.ts"], environment: "node" },
       },
       {
+        // The server and real sync clients over real sockets, through a
+        // proxy that cuts and blocks connections.
+        extends: true,
+        test: {
+          name: "e2e",
+          include: ["e2e/**/*.test.ts"],
+          environment: "node",
+          testTimeout: 180_000,
+        },
+      },
+      {
         extends: true,
         plugins: [react()],
         test: {
