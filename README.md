@@ -8,7 +8,8 @@ It deliberately does not use Yjs, Automerge, Liveblocks, Socket.IO,
 tldraw, Excalidraw, Konva or Fabric: the point is to build the sync (a CRDT
 for the board, and a WebSocket protocol to carry it) and the drawing.
 
-> **Status:** Milestones 0-6 of 7. Boards are shared: everyone with a
+> **Status:** all seven milestones built (locally; there is no GitHub repo
+> yet, so CI has never run). Boards are shared: everyone with a
 > board's link draws on it at once (shapes, arrows, freehand, notes;
 > select, move, resize, recolor, restack, delete; pan and zoom), sees who
 > else is there with their pointers and selections, keeps drawing through
@@ -22,19 +23,26 @@ for the board, and a WebSocket protocol to carry it) and the drawing.
 >
 > TypeScript is the language I am learning on this project (built with
 > Claude): it is not on my resume until I can write and explain it unaided.
+> [`docs/explain-it-yourself.md`](docs/explain-it-yourself.md) holds the
+> questions I have to answer first.
 
 ## Status
 
 | # | Milestone | Status |
 |---|-----------|--------|
-| 0 | Skeleton: npm workspaces (shared, server, client), strict TypeScript, ESLint, Vitest; a Node server with `/healthz`, graceful shutdown and a typed WebSocket hello; React (Vite, TypeScript) shell served by the server; one-container Compose; CI | Done |
-| 1 | The board as a CRDT in `shared`: last-writer-wins properties ordered by (Lamport clock, client id), tombstones, fractional indexes; property tests that any order, duplication or split of the operations converges | Done |
-| 2 | Drawing, one person: shapes, freehand, sticky notes; select, move, resize, delete; pan and zoom; undo and redo, all through the CRDT | Done |
-| 3 | Realtime sync: rooms, a snapshot on joining, operations relayed and acknowledged, reconnection that resends, offline edits merged | Done |
-| 4 | Presence (cursors, selections, who is here) and undo of only your own changes | Done |
-| 5 | Persistence: boards on disk, stored before anything is acknowledged; restarts keep them; SIGKILL test | Done |
-| 6 | Two replicas sharing rooms through Redis pub/sub; load test of propagation latency and convergence | Done |
-| 7 | README: diagram, design decisions, failures found, benchmarks; explain-it-yourself prompts | Not started |
+| 0 | Skeleton: npm workspaces (shared, server, client), strict TypeScript, ESLint, Vitest; a Node server with `/healthz`, graceful shutdown and a typed WebSocket hello; React (Vite, TypeScript) shell served by the server; one-container Compose; CI | Built |
+| 1 | The board as a CRDT in `shared`: last-writer-wins properties ordered by (Lamport clock, client id), tombstones, fractional indexes; property tests that any order, duplication or split of the operations converges | Built |
+| 2 | Drawing, one person: shapes, freehand, sticky notes; select, move, resize, delete; pan and zoom; undo and redo, all through the CRDT | Built |
+| 3 | Realtime sync: rooms, a snapshot on joining, operations relayed and acknowledged, reconnection that resends, offline edits merged | Built |
+| 4 | Presence (cursors, selections, who is here) and undo of only your own changes | Built |
+| 5 | Persistence: boards on disk, stored before anything is acknowledged; restarts keep them; SIGKILL test | Built |
+| 6 | Two replicas sharing rooms through Redis pub/sub; load test of propagation latency and convergence | Built |
+| 7 | README: diagram, design decisions, failures found, benchmarks; explain-it-yourself prompts | Built |
+
+"Built" means built and tested on my machine. By the roadmap's own
+definition the project is done once its tests pass in GitHub Actions and
+I can run it and explain one design choice and one failure mode without
+help; neither has happened yet.
 
 ## Quickstart
 
@@ -46,6 +54,7 @@ open http://localhost:8300   # a new board: its address (/b/<id>) is its link
 # open the same link in a second window, and draw in both
 curl localhost:8300/healthz
 make down      # the boards stay in a Docker volume; `make reset` deletes them
+make up-replicas  # or two servers sharing boards, on :8310 and :8311 (see below)
 ```
 
 `make smoke` starts a separate stack on :8301, checks it from outside over
@@ -54,10 +63,146 @@ lose nothing acknowledged, and a clean stop with a client connected), and
 removes it. It needs Node 22 or newer on the host for the
 WebSocket checks.
 
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph onA["People on server a: each browser"]
+        editor["Editor<br/>its own replica of the board,<br/>undo, gestures"]
+        engine["Sync engine<br/>pending edits, acks,<br/>reconnect, upload"]
+    end
+    onB["People on server b"]
+
+    subgraph serverA["Server a: Node, one process"]
+        roomA["A room per board<br/>the server's replica, who is here,<br/>change numbers"]
+    end
+    subgraph serverB["Server b: the same"]
+        roomB["A room per board"]
+    end
+
+    redis["Redis pub/sub<br/>a channel per board"]
+    db[("SQLite: one file on one volume<br/>registers, epochs, change numbers")]
+
+    editor <--> engine
+    engine <-->|"WebSocket /ws: ops, ack,<br/>presence, welcome"| roomA
+    roomB <-->|"WebSocket /ws"| onB
+    roomA -->|"① commit, fsync"| db
+    roomA -->|"② publish"| redis
+    redis -->|"edits, presence, rosters"| roomB
+    roomB -.->|"each tick: what the bus missed"| db
+```
+
+What one edit goes through, from a drag on server a's side to a person on
+server b:
+
+```
+pointer moves ──► Editor: a new operation, stamped, applied to this browser's replica at once
+   ──► Sync engine: pending; sent in the next 16 ms frame ──► server a: checked whole, applied
+   ──► committed to SQLite with an fsync, given the board's next change number
+   ──► published on the board's Redis channel ──► relayed to a's other people ──► ack to the sender
+server b: hears it ──► applies it to its replica ──► relays it to its people
+   (if Redis lost it: at the next ticks, b sees a change number on disk it has not had,
+    and reads every register written since)
+```
+
+Every replica (each browser's, each server's) merges edits the same way,
+whatever order they come in, so the copies agree once they have the same
+edits. The server is the meeting point and the store: it never edits a
+board itself, and it acknowledges an edit only once it is on disk. Presence
+(pointers, selections, names) takes the same paths but is never stored.
+
+## How the board stays the same everywhere
+
+Every browser holds its own copy of the board (a *replica*) and edits it
+at once, without asking the server. Copies then exchange their edits, and
+must end up identical however the edits travel: late, out of order,
+twice, or through someone else. The board is a CRDT (conflict-free
+replicated data type) built for that, in `shared/src/board/`:
+
+- **One kind of edit:** an *operation* sets some properties of one shape,
+  all with one *stamp*. Creating a shape sets every property; moving it
+  sets `x` and `y`; deleting it sets `deleted`.
+
+  ```json
+  {"shape": "3f9c2a1b7d4e6f80.12", "stamp": {"counter": 14, "client": "3f9c2a1b7d4e6f80"}, "set": {"x": 120, "y": 40}}
+  ```
+
+- **Each property is a last-writer-wins register.** A shape is a map from
+  property to (value, stamp), and an arriving value replaces the stored
+  one only if its stamp is later. Taking the later of two values does not
+  depend on which arrives first, or how often, so copies that have seen
+  the same edits hold the same board. Two people can change different
+  properties of one shape at once (one moves it, one recolors it) and
+  both changes stay.
+- **"Later" is a Lamport clock.** Each copy counts its own edits and jumps
+  past the counter of every edit it receives, so an edit made after
+  seeing another always has a higher counter and wins. Edits made at the
+  same time without seeing each other are ordered by client id:
+  arbitrarily, but the same everywhere.
+- **Deleting keeps a tombstone.** A deleted shape stays, with `deleted`
+  set, so a move that arrives after the delete changes a deleted shape
+  instead of bringing it back. Undoing a delete is a later `deleted:
+  false`.
+- **An edit can arrive before its shape:** it is kept and merged when the
+  creation comes; a shape is drawn once it has a kind and a box.
+- **Stacking order is a fractional index:** each shape holds a key, and
+  shapes are drawn in key order (then by id, for two keys chosen at once).
+  There is always room for a key between two others, so moving a shape in
+  the stack changes only that shape. Keys are base-62 strings that never
+  end in "0"; a shape put on top gets the top key with its last digit
+  raised, which grows keys by one character every 61 shapes.
+- **Whole states merge the same way** (`Replica.merge`), register by
+  register: a snapshot of a board can be combined with anything else.
+
+### How it is tested
+
+- **Against a model.** fast-check plays random histories: two to four
+  replicas create, edit, delete and restore shapes they know about, and
+  receive a random part of each other's operations as they go. The board
+  built from all the operations must equal a separately written model
+  (for each property, the value of the latest operation that set it), with
+  its own ordering code, so a bug in the comparison cannot hide on both
+  sides.
+- **Order, repeats and splits.** The same operations in a shuffled order
+  with some repeated; every replica catching up from wherever it stood;
+  and the operations split among up to four replicas whose whole states
+  are then merged in any order: all must give the same board.
+- **Causality.** In every history, each edit a replica makes is checked to
+  be stamped later than everything that replica has seen, and a new shape
+  to land on top of everything it draws.
+- **The wire.** Every operation a replica makes survives JSON and the
+  network checks (`parseOperation`) unchanged; 22 malformed operations are
+  refused, each with its reason.
+- **Order keys:** any sequence of insertions (on top, at the bottom, at
+  either end, between two keys) keeps keys valid, distinct and in order;
+  `keyBetween` lands between any two keys, including a key and itself
+  followed by zeros.
+- **Eleven planted bugs,** one at a time, each make the tests fail: the
+  client tie-break dropped, the clock not moved on receiving or on
+  merging, equal stamps settled by arrival, the comparison flipped,
+  deleted shapes drawn, an edit wiping what was known about its shape, a
+  key that does not go up, a missing digit not read as zero, unknown
+  properties skipped, new shapes put at the bottom. Two of them passed at
+  first (failure 2).
+
+What it does **not** do yet:
+
+- **Concurrent edits of the same property keep one of them.** Two people
+  dragging the same shape at once: one position wins. That is the point
+  of a register, but for a note's text it means two people typing in the
+  same note at once keep only one person's text; merging text character
+  by character needs a sequence CRDT, which is not built.
+- **Tombstones are never removed.** Doing so safely needs to know every
+  replica has seen the delete.
+- **Order keys are never rebalanced.** A key grows by a character every 61
+  shapes put on top or sent to the back, and every 5 or 6 placed between
+  the same two neighbours (measured); at 1,024 characters a new key is
+  refused rather than sent.
+
 ## Sync
 
 A board's link is `/b/<id>`; opening `/` starts a new board. Every browser
-on a board holds a replica (see below), edits it at once, and exchanges
+on a board holds a replica (see above), edits it at once, and exchanges
 edits through the server: JSON text frames on `/ws`, protocol version 3,
 typed in `shared/src/protocol.ts` and used by both sides.
 
@@ -85,7 +230,8 @@ presence {name, color, cursor, selection} ─►   relayed as presence {client, 
   Offline with how many changes are waiting; the browser reconnects with
   exponential backoff and jitter (0.5 s doubling to 10 s, times 0.5 to 1)
   and resends everything still pending. An edit the server applied whose
-  ack was lost arrives twice, which changes nothing (Milestone 1).
+  ack was lost arrives twice, which changes nothing (merging is
+  idempotent).
 - **A server that lost the board** is recognised by its `epoch`, a random
   name for the server's copy of each board, stored with it. After a
   restart the epoch is the same, and browsers resend only what was not
@@ -165,6 +311,88 @@ queue in the server's memory); shrink what is pending (a drag made offline
 resends every intermediate position); send anything but the whole board
 on joining.
 
+## Who else is here
+
+- **People:** the masthead shows you (click to rename) and up to five
+  others, by initials in their colors; a screen reader hears how many
+  others are here. Your name is generated the first time ("Teal Otter")
+  and kept in this browser; its color follows from the name, so a name
+  looks the same to everyone. There are no accounts.
+- **Pointers and selections:** everyone else's pointer, with their name,
+  and an outline around what they have selected, in their color. Both are
+  in board coordinates, so they land on the same shape whatever each
+  viewer's pan and zoom.
+- **Presence is not the board.** It is not a CRDT, not stored and not
+  acknowledged: the server passes it on and forgets it when a connection
+  closes, announcing `left`. A browser sends its own at most every 40 ms
+  (a pointer moves 60 to 120 times a second; the latest wins) and again
+  after every welcome; offline, it forgets the others, since it cannot
+  know who is there.
+- A browser can briefly have two connections (a reconnect before the old
+  one is noticed gone); others see it once, and its old connection closing
+  is not announced as leaving.
+- **Colors for people** are the four markers that keep a name tag's text
+  at 4.5:1 or better in both themes (red, green, blue, violet); orange
+  (3.7:1) and yellow (3.1:1) do not, under white text in the light theme.
+
+## Drawing
+
+The board fills the window; the marker tray along the bottom holds the
+tools, the colors (each drawn as a marker cap; the chosen one is lifted),
+Fill, Undo and Redo, and, with something selected, Bring to front, Send
+to back and Delete.
+
+| Key | Does |
+|-----|------|
+| V, H | Select; pan |
+| R, O, A, P, N | Rectangle, ellipse, arrow, pen, note: drag to draw, or click for a default size |
+| Space (held), middle button | Pan, with any tool |
+| Wheel, trackpad scroll | Pan |
+| Ctrl/Cmd + wheel | Zoom around the pointer (10% to 800%); + and - zoom around the centre |
+| Click, Shift+click, drag on empty board | Select one; add or remove one; select what the drag encloses |
+| Drag a shape, a corner, an arrow's end | Move; resize; move that end |
+| Arrows (Shift: by 10) | Nudge the selection |
+| ] and [ | Bring to front; send to back |
+| Delete or Backspace, Escape, Ctrl/Cmd+A | Delete; clear the selection; select all |
+| Enter or double-click on a note | Edit its text (Escape or Ctrl/Cmd+Enter to finish); the note grows to fit |
+| Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl+Y | Undo; redo |
+
+- **Every change is an operation on the replica,** sent to everyone else
+  on the board (see Sync): a drag sends one per pointer move, a note one
+  per keystroke, so others see shapes move and text typed as it happens.
+- **Undo makes new edits.** It sets the changed properties back to the
+  values they had, with new stamps; it rewinds nothing. A gesture (a
+  drag, a resize, a typing session) is one undo step however many
+  operations it made, and cancelling one (Escape, a lost pointer) puts
+  things back without leaving a step.
+- **Undo reverts only your own changes.** For each property a step
+  changed, the editor keeps the stamp of the edit that last wrote it; for
+  each property on the board, the newest edit by anyone else. Undo (and
+  redo, and cancelling a gesture) leaves a property someone else has
+  written since, and says so: "Could not undo Move shape: someone else
+  has changed it since", or "Undid Edit, except what someone else has
+  changed since", out loud and in a notice on screen. The rule is per
+  property: undoing a shape's creation deletes it even if someone else
+  has moved it.
+- **"Is the current value still mine?" is not the test,** and the
+  difference is real: move a shape, someone else moves it, move it
+  again, and undo twice. The second undo finds a value of its own (the
+  first undo's) and would wipe the other person's move. Comparing stamps
+  with the newest edit by anyone else does not; a test plays exactly this.
+- **A click is not an edit.** Gestures that change shapes start only after
+  the pointer moves 4 pixels, so selecting a shape sends nothing and
+  leaves nothing to undo.
+- A shape being drawn, or a pen stroke, is a preview until the pointer
+  is released, and then one operation: others will see strokes appear
+  whole, not as they are drawn.
+
+What it does **not** do yet: rotate, copy and paste, text in shapes other
+than notes, resize several shapes at once, pinch-zoom on a touch screen,
+or let a screen reader explore the shapes (it hears how many there are,
+and what each action did). It uses pointer events, which cover touch and
+pens as well as mice, but only a mouse and a trackpad have been tried; a
+trackpad pinch was not tested.
+
 ## Boards on disk
 
 Boards are stored in SQLite (`/data/boards.sqlite` in the container, a
@@ -178,9 +406,10 @@ build.
   log and periodic snapshots"; the registers make both unnecessary.)
 - **The merge rule is not written in SQL.** The server's replica decides
   which value wins, as every browser's does, and the store writes the
-  registers it changed. A second copy in SQL would compare text by UTF-8
-  bytes where JavaScript compares UTF-16 code units, and the two could
-  disagree.
+  registers it changed; before replacing a stored register, it asks the
+  same `wins` function (that matters with two servers: see below). A second
+  copy of the rule in SQL would compare text by UTF-8 bytes where
+  JavaScript compares UTF-16 code units, and the two could disagree.
 - **Stored, then acknowledged.** For each batch of edits the server
   applies, commits (WAL journal, `synchronous = FULL`: the commit returns
   after an fsync), and only then passes it on (to the other servers, then
@@ -280,7 +509,8 @@ make smoke-replicas # 21 checks against a separate stack on :8312/:8313
   same moment agree on its epoch, and the board limit holds across servers.
   (The shape limit is checked by each server against what it has heard, so
   two could together pass it by what is still on its way between them.)
-- **The schema is versioned.** Milestone 5's database is upgraded in place
+- **The schema is versioned.** A database from before two servers
+  (Milestone 5's) is upgraded in place
   as a server starts (it gains the change numbers); one from a later
   version is refused, not changed.
 
@@ -330,7 +560,7 @@ make smoke-replicas # 21 checks against a separate stack on :8312/:8313
   (from disk) while the other person dropped out of view, and came back
   when Redis did.
 
-### Load test
+## Load testing
 
 `make bench` (`bench/run.ts`, with the generator `bench/load.ts`): 32
 simulated people on one board of 50 shapes, each moving a random shape on a
@@ -348,7 +578,7 @@ server benchmark. 13 of 16 runs valid.
 
 - **Every run converged** (all 16, from 320 to 3,840 edits a second):
   every edit acknowledged, all 32 people on the same board, and the board
-  on disk the same on both servers.
+  each server read back from disk the same as theirs.
 - **At 320 edits a second** (32 people moving something 10 times a second
   each), an edit reached the others in about 2 ms, median (2.1-2.2 ms on
   one server; 2.3-2.5 ms crossing to the other server through Redis).
@@ -357,176 +587,6 @@ server benchmark. 13 of 16 runs valid.
   against 3.2 and 22 ms with everyone on one server. Why is not
   established (see `bench/RESULTS.md`): both servers write one SQLite file,
   one at a time, and each waits for its writes synchronously.
-
-## Who else is here
-
-- **People:** the masthead shows you (click to rename) and up to five
-  others, by initials in their colors; a screen reader hears how many
-  others are here. Your name is generated the first time ("Teal Otter")
-  and kept in this browser; its color follows from the name, so a name
-  looks the same to everyone. There are no accounts.
-- **Pointers and selections:** everyone else's pointer, with their name,
-  and an outline around what they have selected, in their color. Both are
-  in board coordinates, so they land on the same shape whatever each
-  viewer's pan and zoom.
-- **Presence is not the board.** It is not a CRDT, not stored and not
-  acknowledged: the server passes it on and forgets it when a connection
-  closes, announcing `left`. A browser sends its own at most every 40 ms
-  (a pointer moves 60 to 120 times a second; the latest wins) and again
-  after every welcome; offline, it forgets the others, since it cannot
-  know who is there.
-- A browser can briefly have two connections (a reconnect before the old
-  one is noticed gone); others see it once, and its old connection closing
-  is not announced as leaving.
-- **Colors for people** are the four markers that keep a name tag's text
-  at 4.5:1 or better in both themes (red, green, blue, violet); orange
-  (3.7:1) and yellow (3.1:1) do not, under white text in the light theme.
-
-## Drawing
-
-The board fills the window; the marker tray along the bottom holds the
-tools, the colors (each drawn as a marker cap; the chosen one is lifted),
-Fill, Undo and Redo, and, with something selected, Bring to front, Send
-to back and Delete.
-
-| Key | Does |
-|-----|------|
-| V, H | Select; pan |
-| R, O, A, P, N | Rectangle, ellipse, arrow, pen, note: drag to draw, or click for a default size |
-| Space (held), middle button | Pan, with any tool |
-| Wheel, trackpad scroll | Pan |
-| Ctrl/Cmd + wheel | Zoom around the pointer (10% to 800%); + and - zoom around the centre |
-| Click, Shift+click, drag on empty board | Select one; add or remove one; select what the drag encloses |
-| Drag a shape, a corner, an arrow's end | Move; resize; move that end |
-| Arrows (Shift: by 10) | Nudge the selection |
-| ] and [ | Bring to front; send to back |
-| Delete or Backspace, Escape, Ctrl/Cmd+A | Delete; clear the selection; select all |
-| Enter or double-click on a note | Edit its text (Escape or Ctrl/Cmd+Enter to finish); the note grows to fit |
-| Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl+Y | Undo; redo |
-
-- **Every change is an operation on the replica,** sent to everyone else
-  on the board (see Sync): a drag sends one per pointer move, a note one
-  per keystroke, so others see shapes move and text typed as it happens.
-- **Undo makes new edits.** It sets the changed properties back to the
-  values they had, with new stamps; it rewinds nothing. A gesture (a
-  drag, a resize, a typing session) is one undo step however many
-  operations it made, and cancelling one (Escape, a lost pointer) puts
-  things back without leaving a step.
-- **Undo reverts only your own changes.** For each property a step
-  changed, the editor keeps the stamp of the edit that last wrote it; for
-  each property on the board, the newest edit by anyone else. Undo (and
-  redo, and cancelling a gesture) leaves a property someone else has
-  written since, and says so: "Could not undo Move shape: someone else
-  has changed it since", or "Undid Edit, except what someone else has
-  changed since", out loud and in a notice on screen. The rule is per
-  property: undoing a shape's creation deletes it even if someone else
-  has moved it.
-- **"Is the current value still mine?" is not the test,** and the
-  difference is real: move a shape, someone else moves it, move it
-  again, and undo twice. The second undo finds a value of its own (the
-  first undo's) and would wipe the other person's move. Comparing stamps
-  with the newest edit by anyone else does not; a test plays exactly this.
-- **A click is not an edit.** Gestures that change shapes start only after
-  the pointer moves 4 pixels, so selecting a shape sends nothing and
-  leaves nothing to undo.
-- A shape being drawn, or a pen stroke, is a preview until the pointer
-  is released, and then one operation: others will see strokes appear
-  whole, not as they are drawn.
-
-What it does **not** do yet: rotate, copy and paste, text in shapes other
-than notes, resize several shapes at once, pinch-zoom on a touch screen,
-or let a screen reader explore the shapes (it hears how many there are,
-and what each action did). It uses pointer events, which cover touch and
-pens as well as mice, but only a mouse and a trackpad have been tried; a
-trackpad pinch was not tested.
-
-## How the board stays the same everywhere
-
-Every browser holds its own copy of the board (a *replica*) and edits it
-at once, without asking the server. Copies then exchange their edits, and
-must end up identical however the edits travel: late, out of order,
-twice, or through someone else. The board is a CRDT (conflict-free
-replicated data type) built for that, in `shared/src/board/`:
-
-- **One kind of edit:** an *operation* sets some properties of one shape,
-  all with one *stamp*. Creating a shape sets every property; moving it
-  sets `x` and `y`; deleting it sets `deleted`.
-
-  ```json
-  {"shape": "3f9c2a1b7d4e6f80.12", "stamp": {"counter": 14, "client": "3f9c2a1b7d4e6f80"}, "set": {"x": 120, "y": 40}}
-  ```
-
-- **Each property is a last-writer-wins register.** A shape is a map from
-  property to (value, stamp), and an arriving value replaces the stored
-  one only if its stamp is later. Taking the later of two values does not
-  depend on which arrives first, or how often, so copies that have seen
-  the same edits hold the same board. Two people can change different
-  properties of one shape at once (one moves it, one recolors it) and
-  both changes stay.
-- **"Later" is a Lamport clock.** Each copy counts its own edits and jumps
-  past the counter of every edit it receives, so an edit made after
-  seeing another always has a higher counter and wins. Edits made at the
-  same time without seeing each other are ordered by client id:
-  arbitrarily, but the same everywhere.
-- **Deleting keeps a tombstone.** A deleted shape stays, with `deleted`
-  set, so a move that arrives after the delete changes a deleted shape
-  instead of bringing it back. Undoing a delete is a later `deleted:
-  false`.
-- **An edit can arrive before its shape:** it is kept and merged when the
-  creation comes; a shape is drawn once it has a kind and a box.
-- **Stacking order is a fractional index:** each shape holds a key, and
-  shapes are drawn in key order (then by id, for two keys chosen at once).
-  There is always room for a key between two others, so moving a shape in
-  the stack changes only that shape. Keys are base-62 strings that never
-  end in "0"; a shape put on top gets the top key with its last digit
-  raised, which grows keys by one character every 61 shapes.
-- **Whole states merge the same way** (`Replica.merge`), register by
-  register: a snapshot of a board can be combined with anything else.
-
-### How it is tested
-
-- **Against a model.** fast-check plays random histories: two to four
-  replicas create, edit, delete and restore shapes they know about, and
-  receive a random part of each other's operations as they go. The board
-  built from all the operations must equal a separately written model
-  (for each property, the value of the latest operation that set it), with
-  its own ordering code, so a bug in the comparison cannot hide on both
-  sides.
-- **Order, repeats and splits.** The same operations in a shuffled order
-  with some repeated; every replica catching up from wherever it stood;
-  and the operations split among up to four replicas whose whole states
-  are then merged in any order: all must give the same board.
-- **Causality.** In every history, each edit a replica makes is checked to
-  be stamped later than everything that replica has seen, and a new shape
-  to land on top of everything it draws.
-- **The wire.** Every operation a replica makes survives JSON and the
-  network checks (`parseOperation`) unchanged; 22 malformed operations are
-  refused, each with its reason.
-- **Order keys:** any sequence of insertions (on top, at the bottom, at
-  either end, between two keys) keeps keys valid, distinct and in order;
-  `keyBetween` lands between any two keys, including a key and itself
-  followed by zeros.
-- **Eleven planted bugs,** one at a time, each make the tests fail: the
-  client tie-break dropped, the clock not moved on receiving or on
-  merging, equal stamps settled by arrival, the comparison flipped,
-  deleted shapes drawn, an edit wiping what was known about its shape, a
-  key that does not go up, a missing digit not read as zero, unknown
-  properties skipped, new shapes put at the bottom. Two of them passed at
-  first (failure 2).
-
-What it does **not** do yet:
-
-- **Concurrent edits of the same property keep one of them.** Two people
-  dragging the same shape at once: one position wins. That is the point
-  of a register, but for a note's text it means two people typing in the
-  same note at once keep only one person's text; merging text character
-  by character needs a sequence CRDT, which is not built.
-- **Tombstones are never removed.** Doing so safely needs to know every
-  replica has seen the delete.
-- **Order keys are never rebalanced.** A key grows by a character every 61
-  shapes put on top or sent to the back, and every 5 or 6 placed between
-  the same two neighbours (measured); at 1,024 characters a new key is
-  refused rather than sent.
 
 ## HTTP
 
@@ -544,10 +604,10 @@ Needs Node 24 (`.nvmrc`; `nvm use`).
 
 ```bash
 make install     # npm ci for all three packages
-make check       # ESLint (type-aware), tsc -b (tests included), Vitest, build
+make check       # ESLint (type-aware), tsc -b (tests included), 336 Vitest tests, build
 make dev-server  # the server on :8000, restarting on changes
 make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
-make test-redis  # the bus tests against a real Redis, in a throwaway container
+make test-redis  # the 3 bus tests that need a real Redis (skipped by make check), in a container
 make bench       # the load test (bench/run.ts): about 10 minutes, in Docker
 ```
 
@@ -558,166 +618,145 @@ Settings, all optional: `SYNCBOARD_PORT`, `SYNCBOARD_DATA_DIR`,
 
 ## Layout
 
+Every file, by folder. Tests sit beside what they test.
+
 | Path | What |
 |------|------|
-| `shared/src/protocol.ts` | The messages, their types and their validation |
-| `shared/src/board/replica.ts` | The board as a CRDT: applying operations, merging states, the shapes to draw |
-| `shared/src/board/shape.ts` | A shape's properties, and the check for each |
-| `shared/src/board/operation.ts` | The operation, and checking one from the network |
-| `shared/src/board/stamp.ts` | Stamps, their order, and client ids |
-| `shared/src/board/order.ts` | Fractional order keys |
-| `shared/src/board/replica.test.ts` | The simulation, the model, and the convergence properties |
-| `server/src/app.ts` | The HTTP server, the WebSocket endpoint, shutdown |
-| `server/src/static.ts` | Serving the built client, and nothing else from disk |
-| `server/src/config.ts` | `SYNCBOARD_*` environment variables |
-| `server/src/main.ts` | Startup, and shutting down on SIGTERM and SIGINT |
-| `server/src/healthcheck.ts` | Docker's health check (the image has no curl) |
-| `client/src/App.tsx` | The page: the masthead, the sync status, the whiteboard |
-| `client/src/sync/sync.ts` | The sync engine: pending edits, acks, reconnecting, uploading a lost board |
-| `client/src/sync/where.ts` | The board from the page's address; the WebSocket's URL |
-| `client/src/sync/identity.ts` | Your name (kept in this browser) and its color |
-| `client/src/People.tsx`, `client/src/canvas/Peers.tsx` | Who is here; others' pointers and selections |
-| `shared/src/presence.ts` | Presence: its type and its check |
-| `server/src/sync.ts` | One connection's protocol: hello, checks, apply, relay, ack |
-| `server/src/rooms.ts` | The boards being served: one room and one replica each, loaded from and written to the store, kept in step with other servers; limits |
-| `server/src/store.ts` | Boards on disk (SQLite): their registers, epochs and change numbers; the schema's upgrade |
-| `server/src/bus.ts` | What servers tell each other, checked on arrival; the in-process LocalNetwork tests use |
-| `server/src/redis-bus.ts` | The bus over Redis pub/sub |
-| `server/src/replicas.test.ts` | Two servers, one board: lost, reordered and missing messages; presence across them |
-| `server/src/redis-bus.test.ts` | The bus against a real Redis (`make test-redis`) |
-| `e2e/replicas.test.ts` | Four sync clients on two servers, a failing bus, restarts: the property test |
-| `compose.replicas.yaml`, `scripts/smoke-replicas.sh` | Two servers and Redis, and their smoke test |
-| `bench/load.ts`, `bench/run.ts` | The load generator, and the benchmark around it |
-| `server/src/store.test.ts` | The store: round trip, replacing, all-or-nothing saves, damaged rows |
-| `e2e/crash.test.ts` | The server as its own process, SIGKILLed six times while edits pour in |
-| `shared/src/board/snapshot.ts` | A whole board on the wire; chunking it; merging one |
-| `e2e/sync.test.ts`, `e2e/link.ts` | The server and three sync clients behind proxies that cut and block |
-| `client/src/board/editor.ts` | The board as the page edits it: the replica, undo and redo, gestures grouped into steps |
-| `client/src/board/geometry.ts` | Viewport, hit testing, resizing: plain functions |
-| `client/src/canvas/Whiteboard.tsx` | Tool, color, selection, viewport, keyboard shortcuts |
-| `client/src/canvas/Board.tsx` | The SVG board and every pointer gesture |
-| `client/src/canvas/ShapeView.tsx`, `NoteEditor.tsx`, `Toolbar.tsx` | Drawing a shape; typing in a note; the marker tray |
-| `server/src/app.test.ts` | HTTP, path traversal, frames, shutdown |
-| `server/src/sync.test.ts` | The protocol with several real clients: relay, acks, uploads, refusals, limits, heartbeat |
-| `client/src/sync/sync.test.ts` | The sync engine against a scripted socket |
-| `client/src/App.test.tsx` | The page against a scripted socket: status, edits sent and received, Copy link |
-| `client/src/canvas/Whiteboard.test.tsx` | Drawing, selecting, editing, undo, pan and zoom, through pointer and key events |
-| `scripts/smoke.sh`, `scripts/ws-check.mjs` | Checks a running container from outside |
+| **`shared/src/`** | **What the server and the browser both use** |
+| `protocol.ts` | The messages between browser and server, their types, and their checks (from `unknown`) |
+| `presence.ts` | Presence: its type, its check, and the colors people get |
+| `board/replica.ts` | The board as a CRDT: applying operations, merging states, `wins`, the shapes to draw |
+| `board/shape.ts` | A shape's properties, and the check for each |
+| `board/operation.ts` | The operation, and checking one from the network |
+| `board/stamp.ts` | Stamps and their order; client and board ids; the counter cap |
+| `board/order.ts` | Fractional order keys |
+| `board/snapshot.ts` | A whole board on the wire; chunking it; merging one |
+| `board/replica.test.ts` | The simulation, the model, and the convergence properties |
+| `board/order.test.ts`, `operation.test.ts`, `snapshot.test.ts`, `ids.test.ts`, `../protocol.test.ts`, `../presence.test.ts` | Keys, operations, snapshots, ids, messages and presence, each checked |
+| **`server/src/`** | **The server** |
+| `main.ts` | Startup, and shutting down on SIGTERM and SIGINT |
+| `app.ts` | The HTTP server, the WebSocket endpoint, the heartbeat, the tick, shutdown |
+| `sync.ts` | One connection's protocol: hello, checks, apply, relay, ack |
+| `rooms.ts` | The boards being served: a room and a replica each, loaded from and written to the store, kept in step with other servers; limits |
+| `store.ts` | Boards on disk (SQLite): registers, epochs, change numbers; the schema's upgrade |
+| `bus.ts` | What servers tell each other, checked on arrival; the in-process LocalNetwork the tests use |
+| `redis-bus.ts` | The bus over Redis pub/sub |
+| `static.ts` | Serving the built client, and nothing else from disk |
+| `config.ts` | The `SYNCBOARD_*` environment variables |
+| `healthcheck.ts` | Docker's health check (the image has no curl) |
+| `log.ts`, `version.ts` | JSON log lines; the version `/healthz` reports |
+| `app.test.ts` | HTTP, path traversal, frames, shutdown |
+| `sync.test.ts` | The protocol with several real clients: relay, acks, uploads, refusals, limits, heartbeat, storage failures |
+| `store.test.ts` | The store: round trip, all-or-nothing saves, damaged rows, two servers on one file, the upgrade, four processes opening one new file |
+| `replicas.test.ts` | Two servers, one board: lost, reordered and missing messages; presence across them |
+| `bus.test.ts`, `redis-bus.test.ts`, `config.test.ts` | Bus messages and the LocalNetwork; the bus against a real Redis (`make test-redis`); settings |
+| `testing/client.ts`, `testing/open-store.ts` | A protocol client for tests; a process that opens the store once (not built into the image) |
+| **`client/src/`** | **The browser app** |
+| `main.tsx`, `App.tsx` | The page: the masthead, the sync status, the whiteboard |
+| `People.tsx` | Who is here; renaming yourself |
+| `sync/sync.ts` | The sync engine: pending edits, acks, reconnecting, uploading a lost board, presence |
+| `sync/where.ts`, `sync/identity.ts` | The board from the page's address and the WebSocket's URL; your name and its color |
+| `sync/fakeSocket.ts` | A WebSocket the tests play the server for |
+| `board/editor.ts` | The board as the page edits it: the replica, undo and redo, gestures grouped into steps |
+| `board/geometry.ts` | Viewport, hit testing, resizing: plain functions |
+| `canvas/Whiteboard.tsx` | Tool, color, selection, viewport, keyboard shortcuts, notices |
+| `canvas/Board.tsx` | The SVG board and every pointer gesture |
+| `canvas/ShapeView.tsx`, `NoteEditor.tsx`, `Toolbar.tsx`, `Peers.tsx` | Drawing a shape; typing in a note; the marker tray; others' pointers and selections |
+| `canvas/tools.ts`, `outcome.ts`, `icons.tsx` | The tools and their keys; what an undo did, in words; the icons |
+| `index.css` | The look, both themes |
+| `*.test.ts(x)`, `test-setup.ts` | The engine against a scripted socket; the editor; geometry; the page and the whiteboard through pointer and key events (jsdom) |
+| **`e2e/`** | **The real server and the browser's sync code, in one process** |
+| `sync.test.ts`, `link.ts` | One server and three sync clients behind proxies that cut and block |
+| `replicas.test.ts` | Four sync clients on two servers, a failing bus, restarts: the property test |
+| `crash.test.ts` | The server as its own process, SIGKILLed six times while edits pour in |
+| **`bench/`** | **The load test** |
+| `load.ts`, `run.ts` | The load generator; the benchmark around it (passes, swap checks, results) |
+| `compose.bench.yaml`, `Dockerfile` | Its stack, and the generator's image |
+| `RESULTS.md`, `results/` | What was measured, with its caveats; every run |
+| **`scripts/`** | |
+| `smoke.sh`, `smoke-replicas.sh`, `ws-check.mjs` | Checks a running stack from outside, one server or two |
+| `test-redis.sh` | Runs the bus tests against Redis in a throwaway container |
+| **The root** | |
+| `compose.yaml`, `compose.replicas.yaml`, `Dockerfile` | One server; two servers and Redis; the image (non-root, health-checked) |
+| `Makefile`, `package.json` | Every command; the npm workspaces |
+| `tsconfig*.json`, `eslint.config.js`, `vitest.config.ts` | Strict TypeScript for every package, type-aware linting, the four test projects |
+| `.github/workflows/ci.yml` | CI: checks with Redis, the one-server smoke test, the two-server one (never run yet) |
+| `docs/explain-it-yourself.md` | The questions to answer before this goes near a resume |
 
-## Decisions so far
+## Design decisions
 
-- **The sync is built, not bought.** No Yjs, Automerge or Liveblocks: a
-  CRDT and a sync protocol are what this project is for.
-- **One set of types for both sides.** npm workspaces: `shared` holds the
-  protocol, and the server and the client import it. The server runs on
-  its compiled output; the client and the tests use its source, so they
-  never run against a stale build.
-- **Messages are checked by hand, from `unknown`.** No schema library yet:
-  the parse functions narrow each field themselves, which is the
-  TypeScript I am here to learn. An unknown field is ignored; an unknown
-  type or a different protocol version is refused.
-- **TypeScript at its strictest, and type-aware linting:** `strict` plus
-  `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`, and
-  typescript-eslint's `strictTypeChecked` (floating promises, unnecessary
-  conditions, unsafe `any`). Tests are type-checked too.
-- **TypeScript 6.0, not 7.** TypeScript 7 is out, but typescript-eslint
-  supports versions below 6.1.
-- **Node 24, the current LTS, everywhere** (`.nvmrc`, CI, the image):
-  Node 20 is past its end of life, and the 22.9 on this machine is older
-  than Vite 8 needs.
-- **Node runs as PID 1 and handles SIGTERM itself.** PID 1 gets no default
-  signal handling, so without the handler `docker stop` would wait out the
-  grace period and SIGKILL it. The smoke test stops the container with a
-  client connected and requires a 1001 and exit code 0; with the handler
-  removed, it fails. `stop_grace_period: 15s` is set explicitly, because on
-  this machine Compose killed containers after about a second.
-- **Static files served by hand, narrowly:** `/` and `/assets/<one plain
-  file name>`, checked after decoding, so `..`, slashes (encoded or not),
-  backslashes and dot files never reach the file system. The server's own
-  files sit next to the client in the image; the tests try 14 ways to
-  reach them, and the smoke test 5 more against the real image.
-- **The client's packages are all devDependencies.** They are bundled into
-  `client/dist`, so the image installs only `ws`. Of its 242 MB, about
-  3.4 MB is SyncBoard (dependencies, server, client); the rest is the Node
-  base image.
-- **A register per property, not per shape.** Concurrent edits of
-  different properties both survive; with a register per shape, a recolor
-  would undo a concurrent move.
-- **Strings compare with `<`, never `localeCompare`,** whose answer
-  depends on the machine's locale: two replicas must never disagree about
-  which client id or key comes first.
-- **Equal stamps are settled by the value.** Honest replicas never make
-  two edits with one stamp, but if one did (a bug, or a forged
-  operation), every replica still picks the same value.
-- **A new client id every time a page loads,** 64 random bits from
-  `crypto.getRandomValues`: a reloaded page has lost its clock, and must
-  not repeat stamps it used before. Not `randomUUID`, which browsers offer
-  only on HTTPS and localhost.
-- **Operations with unknown properties are refused,** not stripped: the
-  board could not store them, and a new property is a protocol change.
-- **Colors are names** ("ink", "blue"), not hex, so each can have its own
-  light and dark rendering.
-- **Order keys go on top by raising the last digit,** not by midpoint:
-  after 1,000 shapes added on top, keys are 17 characters long instead of
-  201 (measured).
-- **SVG, not a canvas element.** React draws each shape as an element,
-  which is simple and fast enough for hundreds of shapes; a canvas would
-  win for many thousands. Hit testing is done by plain functions
-  (`geometry.ts`) rather than the browser, so it is tested without one.
-- **The editor is not React.** `Editor` (replica, undo, redo) is a plain
-  class the page subscribes to with `useSyncExternalStore`; it is tested
-  directly, and Milestone 3 can feed it remote operations the same way.
-- **Two typefaces, bundled:** Atkinson Hyperlegible Next for the interface
-  and Shantell Sans for notes and the name, so a self-hosted board makes
-  no requests to a font service.
-- **Acks by counter, not by message.** A replica's own counters only go
-  up, so "everything up to 37" acknowledges any number of edits in one
-  number, and clears a prefix of what is pending.
-- **The server relays only what changed it.** An edit that loses to one
-  already applied is acknowledged and dropped: everyone in the room was
-  sent the newer one first.
-- **A lost board is re-uploaded, recognised by its epoch.** Without that,
-  after a restart, people already on a board would keep seeing it while
-  anyone joining saw an empty one. The upload carries other people's
-  stamps too, so the server checks it but cannot hold it to "your edits
-  only": a client could forge another's edits this way. Without
-  accounts, nothing stops it from editing anything under its own name
-  anyway.
-- **Counters are capped at 2^52, for everyone.** A client sending 2^53 - 1
-  would push every clock to the end of the integers a double holds
-  exactly. With the cap, a clock pushed all the way up still has 2^52
-  edits to go. (See failure 9 for why not "so far ahead of the board".)
-- **Refusals are final in the browser;** dropped connections are not. A
-  refused edit would be refused again, and retrying forever would hammer
-  the server.
-- **Board ids are 12 random base-62 characters** (71 bits): the link is
-  the only key to a board, so it must not be guessable.
-- **Servers share boards through the disk first, Redis second.** The bus
-  makes an edit reach the other server's people in milliseconds; the
-  numbered writes make it reach them at all. The alternative, a log on
-  Redis Streams that servers read from where they left off, would have
-  made Redis part of keeping the board correct; here it can go away and
-  the boards stay right.
-- **Every server hears every board it has loaded, not every board.** One
-  pub/sub channel per board, joined when the board is loaded and left
-  when it is dropped. Joining is not instant: what is published before the
-  subscription takes is found on disk at the next ticks.
-- **One Redis connection to publish on, one to listen on:** a subscribed
-  Redis connection can do nothing else. The publisher does not queue while
-  disconnected (`disableOfflineQueue`): a publish then is dropped and
-  counted, rather than kept in memory for as long as Redis is gone.
-- **A room checks the disk every 500 ms,** one indexed read of one row
-  per loaded board; a missing change is read from disk only if it is
-  still missing at the next tick, so messages that are merely late (or
-  out of order: two servers publish independently) cost nothing.
-- **The merge rule stays in TypeScript, on the disk too.** Two servers'
-  writes to one register must keep the later one; the store reads the
-  register inside its write transaction and asks the replica's `wins`,
-  rather than putting a second copy of the rule in SQL.
-- **Not yet:** accounts, permissions, and an `Origin` check on the
-  WebSocket. Anyone with a board's link can draw on it; anyone who can
-  reach the port can make boards, up to the limit (1,000 boards of 20,000
-  shapes, set by `SYNCBOARD_MAX_BOARDS` and `SYNCBOARD_MAX_SHAPES`).
+### The board
+
+| Decision | Why | Cost, or what would change it |
+|----------|-----|-------------------------------|
+| The sync is built, not bought: no Yjs, Automerge or Liveblocks | A CRDT and a sync protocol are what this project is for | None of their features: no text CRDT, no history compaction |
+| A last-writer-wins register per property, not per shape | Concurrent edits of different properties both survive; with a register per shape, a recolor would undo a concurrent move | Concurrent edits of one property keep one: two people typing in one note keep one person's text |
+| "Later" is a Lamport counter, then the client id; strings compared with `<`, never `localeCompare` | Every replica orders edits the same way; `localeCompare` depends on the machine's locale | Concurrent edits are settled arbitrarily (by client id), though the same everywhere |
+| Equal stamps settled by the value (as JSON) | Honest replicas never make two edits with one stamp, but a bug or a forged one still converges | None for honest replicas |
+| Deletes are tombstones | A move that arrives after a delete must not bring the shape back | Tombstones are never removed: that needs to know every replica has seen the delete |
+| A new client id each time a page loads (64 random bits, `getRandomValues`) | A reloaded page has lost its clock and must not reuse stamps; `randomUUID` exists in browsers only on HTTPS and localhost | One person is many clients over time |
+| Operations with unknown properties are refused, not stripped | The board could not store them; a new property is a protocol change | An older server refuses a newer client's new properties |
+| Counters capped at 2^52, for everyone | A client sending 2^53 - 1 would push every clock to the end of the integers a double holds exactly; with the cap there are still 2^52 edits to go | A fixed ceiling (failure 9 is why not "so far ahead of the board") |
+| Order keys go on top by raising the last digit, not by midpoint | After 1,000 shapes added on top, keys are 17 characters, not 201 (measured) | Keys are never rebalanced; one over 1,024 characters is refused rather than sent |
+| Colors are names ("ink", "blue"), not hex | Each has its own light and dark rendering | A fixed palette |
+
+### Sync
+
+| Decision | Why | Cost, or what would change it |
+|----------|-----|-------------------------------|
+| Every edit stays pending until acknowledged, by counter ("all your edits up to 37") | A replica's own counters only go up, so one number clears a prefix of what is pending | A dropped ack means a resend, which merging makes harmless |
+| The server relays only what changed its replica | An edit that lost had already been beaten by one everyone was sent | Under heavy load, fewer edits reach everyone than were sent (by design: see Load testing) |
+| A lost board is re-uploaded, recognised by its epoch | Otherwise, after losing its data, people already on a board would keep seeing it while anyone joining saw it empty | An upload carries other people's stamps, so it cannot be held to "your edits only": a client could forge others' edits that way (it can edit anything under its own name anyway) |
+| Refusals are final in the browser; dropped connections are retried, with backoff and jitter | A refused edit would be refused again; retrying forever would hammer the server | A refused edit stays only in that browser (the reason is shown) |
+| Messages are checked by hand, from `unknown` | No schema library: narrowing each field is the TypeScript I am here to learn | More code than a schema would need |
+| Presence is relayed, never stored or acknowledged | It is about now; it is resent at most every 40 ms while it changes, and after every welcome | Offline, a browser forgets who else is there |
+| Undo compares stamps with the newest edit by anyone else, per property | "Is the current value still mine?" wipes someone's move (move, they move, move, undo, undo: tested) | Per property: undoing a creation deletes the shape even if someone has moved it since |
+| The editor is not React: a plain class the page subscribes to (`useSyncExternalStore`) | Tested directly; the sync engine feeds it remote edits the same way | Two state systems to keep straight in the page |
+| Board ids are 12 random base-62 characters (71 bits) | The link is the only key to a board, so it must not be guessable | Anyone with the link can draw: there are no accounts |
+
+### Storage and servers
+
+| Decision | Why | Cost, or what would change it |
+|----------|-----|-------------------------------|
+| A board is stored as its registers, not an operation log with snapshots | The registers are the state: nothing to replay on start, nothing to compact | Tombstones stay on disk |
+| The merge rule stays in TypeScript, on the disk too: the store asks `wins` inside its write transaction | A second copy in SQL would compare text by UTF-8 bytes where JavaScript compares UTF-16 code units | A read for every register written |
+| Store with an fsync, then pass on, then acknowledge (WAL, `synchronous = FULL`) | An edit the server dies before storing was never acknowledged, so its browser still has it | One fsync per message; the load test suggests this is what slows one server under heavy load (not measured) |
+| After a storage failure, no more edits until a restart (1011; `/healthz` 503) | The in-memory copy may be ahead of the disk; nothing unstored may be acknowledged | Someone has to restart it; browsers keep their edits meanwhile |
+| Two servers share one SQLite file | The simplest store two processes can share safely: SQLite's locks work between processes on one kernel | One machine only; one writer at a time |
+| Redis for speed, the disk for correctness: numbered writes, and a tick (500 ms) that reads what the bus missed | Pub/sub delivers at most once, and a server can die between storing and publishing; this way Redis can lose messages or go away and the boards stay right. A log on Redis Streams would have made Redis part of keeping boards correct | A lost message costs up to two ticks; every loaded board costs one indexed read per tick |
+| A channel per board, joined when the board is loaded | A server hears only the boards it serves | What is published before the subscription takes is found on disk at the next ticks |
+| The publisher does not queue while Redis is away (`disableOfflineQueue`) | Nothing builds up in memory for as long as Redis is gone | Those messages are dropped (and counted); the tick covers them |
+| Presence repeated in rosters every 2 s; a server not heard from for three is taken off | Lost presence or "left" messages, and servers that die, would leave ghosts | A dead server's people linger up to about 6 s; without Redis, presence does not cross at all |
+| `/healthz` reports the bus, but stays 200 without it | The servers work without Redis | A health check cannot tell "Redis is down" from "fine" by status code alone |
+| The schema is versioned; an older database is upgraded as a server starts, a newer one refused | Milestone 5's boards carry over; a downgrade must not corrupt a newer file | Every schema change needs an upgrade step and a test |
+
+### Building and running
+
+| Decision | Why | Cost, or what would change it |
+|----------|-----|-------------------------------|
+| One set of types for both sides: npm workspaces, `shared` holds the protocol | A protocol change one side does not handle is a compile error | The server runs on `shared`'s compiled output (the client and the tests use its source, so they never run against a stale build) |
+| TypeScript at its strictest (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`), type-aware linting (`strictTypeChecked`), tests type-checked | Catches floating promises, unchecked indexes and unsafe `any` before they run | Slower to write; TypeScript 6.0, not 7, because typescript-eslint supports versions below 6.1 |
+| Node 24, the current LTS, everywhere (`.nvmrc`, CI, the image) | Node 20 is past its end of life; the 22.9 on this machine is older than Vite 8 needs | The machine's default Node is still 20, so `nvm use` first |
+| Node runs as PID 1 and handles SIGTERM itself; `stop_grace_period: 15s` | PID 1 gets no default signal handling; on this machine Compose killed containers after about a second. The smoke test requires a 1001 and exit code 0 | A clean stop waits up to 5 s for clients to go |
+| Static files served by hand, narrowly: `/`, `/b/<id>` and `/assets/<one plain name>` | The server's own files sit next to the client in the image; the tests try 14 ways to reach them, the smoke test 5 more | A small file server to maintain |
+| The client's packages are all devDependencies | They are bundled into `client/dist`, so the image installs only `ws` and the Redis client | Image 255 MB, of which about 13 MB is SyncBoard (11.6 MB of it the Redis client); the rest is the Node base image |
+| SVG, not a canvas element | React draws each shape as an element: simple, and fast enough for hundreds | Many thousands of shapes would want a canvas |
+| Two typefaces bundled (Atkinson Hyperlegible Next, Shantell Sans) | A self-hosted board makes no requests to a font service | A bigger bundle |
+
+### Testing and measuring
+
+| Decision | Why | Cost, or what would change it |
+|----------|-----|-------------------------------|
+| Convergence is tested against a separately written model, with fast-check | A bug in the comparison cannot hide on both sides | "Tested to converge", not proven |
+| The tests are tested: bugs planted one at a time (11 in the CRDT, 8 in sync, 5 in undo, 3 in storage, 9 across servers) must each fail them | Several suites passed planted bugs at first (failures 2, 11, 12), and two loss tests lost only messages that did not matter (failure 19) | Each new suite needs its own planted bugs |
+| End to end in one process: the real server and the browser's own sync code, behind proxies that cut and block | Network failures on demand, without a browser | Not the browser app itself: that is checked by hand in a real browser |
+| The crash test kills a real server process with SIGKILL | Only a separate process can die mid-write | The operating system's page cache survives a SIGKILL: power loss is not tested |
+| The load test is open loop, timed from when each edit was due, in Docker on the servers' network, with a swap check per run and convergence checked at the end | A generator that falls behind shows up as latency, port forwarding is not measured, runs a swapping laptop spoiled are dropped, and fast but wrong would not pass | One laptop: not a server benchmark, and some runs are always lost |
+
+**Not yet:** accounts, permissions, rate limits, and an `Origin` check on
+the WebSocket. Anyone with a board's link can draw on it; anyone who can
+reach the port can make boards, up to the limit (1,000 boards of 20,000
+shapes, set by `SYNCBOARD_MAX_BOARDS` and `SYNCBOARD_MAX_SHAPES`).
 
 ## Failures found while building it
 
