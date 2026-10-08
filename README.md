@@ -8,14 +8,17 @@ It deliberately does not use Yjs, Automerge, Liveblocks, Socket.IO,
 tldraw, Excalidraw, Konva or Fabric: the point is to build the sync (a CRDT
 for the board, and a WebSocket protocol to carry it) and the drawing.
 
-> **Status:** Milestones 0-5 of 7. Boards are shared: everyone with a
+> **Status:** Milestones 0-6 of 7. Boards are shared: everyone with a
 > board's link draws on it at once (shapes, arrows, freehand, notes;
 > select, move, resize, recolor, restack, delete; pan and zoom), sees who
 > else is there with their pointers and selections, keeps drawing through
 > a dropped connection, and ends up with the same board. Undo reverts only
 > your own changes. Boards are stored on disk (SQLite) before anything is
 > acknowledged, and survive restarts and SIGKILL (tested); power loss is
-> not tested.
+> not tested. Two servers can share boards (one data file, Redis pub/sub
+> between them), and stay right when Redis loses messages or goes away;
+> a load test measures how fast edits reach everyone, and checks that
+> everyone ends with the same board.
 >
 > TypeScript is the language I am learning on this project (built with
 > Claude): it is not on my resume until I can write and explain it unaided.
@@ -30,7 +33,7 @@ for the board, and a WebSocket protocol to carry it) and the drawing.
 | 3 | Realtime sync: rooms, a snapshot on joining, operations relayed and acknowledged, reconnection that resends, offline edits merged | Done |
 | 4 | Presence (cursors, selections, who is here) and undo of only your own changes | Done |
 | 5 | Persistence: boards on disk, stored before anything is acknowledged; restarts keep them; SIGKILL test | Done |
-| 6 | Two replicas sharing rooms through Redis pub/sub; load test of propagation latency and convergence | Not started |
+| 6 | Two replicas sharing rooms through Redis pub/sub; load test of propagation latency and convergence | Done |
 | 7 | README: diagram, design decisions, failures found, benchmarks; explain-it-yourself prompts | Not started |
 
 ## Quickstart
@@ -46,8 +49,9 @@ make down      # the boards stay in a Docker volume; `make reset` deletes them
 ```
 
 `make smoke` starts a separate stack on :8301, checks it from outside over
-HTTP and WebSockets (27 checks, including a clean stop with a client
-connected), and removes it. It needs Node 22 or newer on the host for the
+HTTP and WebSockets (36 checks, including a restart and a SIGKILL that
+lose nothing acknowledged, and a clean stop with a client connected), and
+removes it. It needs Node 22 or newer on the host for the
 WebSocket checks.
 
 ## Sync
@@ -179,7 +183,8 @@ build.
   disagree.
 - **Stored, then acknowledged.** For each batch of edits the server
   applies, commits (WAL journal, `synchronous = FULL`: the commit returns
-  after an fsync), and only then relays and acknowledges. An edit the
+  after an fsync), and only then passes it on (to the other servers, then
+  to its own connections) and acknowledges. An edit the
   server dies before storing was never acknowledged, so its browser still
   has it pending and sends it again.
 - **A board is in memory only while someone is on it:** loaded from disk
@@ -226,7 +231,132 @@ operating system's page cache intact; nothing here tests losing it, and
 Docker Desktop's virtual disk sits between the database and the real
 one); back boards up; delete boards; remove deleted shapes (tombstones)
 from disk; group the commits of several connections into one fsync (each
-batch is its own; Milestone 6 measures what that costs).
+batch is its own; the load test suggests this is what slowed one server
+down between 1,920 and 3,840 edits a second, but did not measure it).
+
+## Two servers, one board
+
+Several servers can serve the same boards (`compose.replicas.yaml`: servers
+`a` on :8310 and `b` on :8311, Redis between them). People on one board may
+be on either; each server passes on to the others what it passes on to its
+own connections: edits, after storing them; presence; and who has left.
+
+```bash
+make up-replicas    # Redis and two servers; open a board's link on either port
+make smoke-replicas # 21 checks against a separate stack on :8312/:8313
+```
+
+- **One data file, shared.** Both servers use the same SQLite file on one
+  Docker volume, so they must run on one machine (SQLite's locking and WAL
+  index work between processes on one kernel, not across a network
+  filesystem). Spreading servers over machines would need a networked
+  database: not built.
+- **The disk keeps the winner whoever stores first.** A register is
+  replaced only by a later value, compared with the replica's own `wins`
+  inside the write transaction (which holds SQLite's write lock, so no
+  other server writes in between). A save that would change nothing
+  commits nothing.
+- **Redis pub/sub is only for speed.** One channel per board. Pub/sub
+  delivers a message at most once, to whoever is listening at that moment,
+  and a server can die between storing an edit and publishing it, so
+  nothing correct depends on it:
+  - every write to a board is numbered by the store (`seq`, stored on the
+    registers it wrote). A server knows the numbers it has (its own writes,
+    and those the bus brought, in any order); every tick (500 ms) it
+    compares with the disk, and anything the disk had at the previous tick
+    that the bus has still not brought is read from disk: every register
+    written since the last number it had. A lost message costs up to two
+    ticks, not a wrong board.
+  - presence is repeated: each server sends the others who is on its
+    boards every 2 s (a roster), and a server not heard from for three
+    rosters has its people taken off the board.
+- **Without Redis, the servers keep working.** They start without it,
+  report it in `/healthz` (`"bus": "disconnected"`), publish nothing (no
+  queue builds up), and find each other's edits on disk at the next ticks.
+  People on the other server drop out of view until Redis is back: presence
+  is not stored, so it travels only on the bus.
+- **One epoch per board.** A board is created once, in a transaction that
+  also counts boards against the limit, so two servers creating it at the
+  same moment agree on its epoch, and the board limit holds across servers.
+  (The shape limit is checked by each server against what it has heard, so
+  two could together pass it by what is still on its way between them.)
+- **The schema is versioned.** Milestone 5's database is upgraded in place
+  as a server starts (it gains the change numbers); one from a later
+  version is refused, not changed.
+
+### How it is tested
+
+- **Two servers in one process,** sharing a data directory, connected by a
+  `LocalNetwork` that can lose, delay and hold back messages and cut a
+  server off: an edit reaches the other server's people by the bus (stored
+  once, one epoch); a lost message is read from disk at the next ticks,
+  also when later messages did arrive; with no bus at all the servers still
+  agree; messages out of order need no reading from disk; both servers
+  editing one property at once end with the same winner on both, for
+  their people and on disk; presence and leaving cross servers; a client on
+  the board through both servers at once is not reported gone when one
+  connection closes; a server cut off from the bus has its people taken off
+  after three missed rosters, and they come back with it.
+- **End to end:** four browser sync clients on two servers, behind links
+  that cut and block, and a bus that loses one message in N, delays, and
+  cuts a server off, while servers restart: a property test (fast-check, 20
+  random runs) requires every client, both servers and the disk to end
+  with the same board.
+- **Against a real Redis** (`make test-redis`: Redis 8 in a throwaway
+  container): a message reaches the servers that joined the board and only
+  those; after Redis kills the subscription, the bus reconnects and
+  subscribes again by itself; two servers' edit crosses by Redis, not the
+  disk; and a server whose Redis is not there starts, serves, and drops
+  what it would publish.
+- **The store:** the later value kept whichever server stores first; a
+  save with nothing new uses no number; numbering and "changes since";
+  creating a board two servers make at once; a Milestone 5 database
+  upgraded; and four processes opening one new database at the same
+  moment.
+- **Nine planted bugs** each fail the tests: bus edits marked as had but
+  not applied; never reading from disk; storing over a later value;
+  dropping messages that come out of order; a later number skipping a
+  missing one; "left" passed on while the person is still on another
+  server; quiet servers never expiring; reading from disk one change late;
+  and an updated register keeping its old number.
+- **The smoke test** on the real images: both servers on the bus and on
+  one file; edits crossing within 250 ms both ways; presence and leaving
+  across; Redis stopped (both still healthy, edits crossing from disk
+  within 2 s) and started again; a server restarted, and one SIGKILLed,
+  losing nothing acknowledged; both stopping cleanly.
+- **In a real browser:** a tab on each server, one board. A rectangle drawn
+  on a reached b, a note drawn on b reached a, with each person's pointer
+  and selection; with Redis stopped, an ellipse drawn on a still reached b
+  (from disk) while the other person dropped out of view, and came back
+  when Redis did.
+
+### Load test
+
+`make bench` (`bench/run.ts`, with the generator `bench/load.ts`): 32
+simulated people on one board of 50 shapes, each moving a random shape on a
+fixed schedule (open loop, latency measured from when each edit was due),
+on one server or split over two; at the end, every edit must be
+acknowledged, everyone must hold the same board, and the board each server
+reads back from disk must be that board. Two passes, the second in reverse
+order; a run is invalid if the host swapped in more than 50 MB during its
+8-second window. Full results, method and caveats:
+[`bench/RESULTS.md`](bench/RESULTS.md).
+
+Measured on one 8 GB MacBook Air M2 under Docker Desktop, the load
+generator in a container on the same machine; a laptop measurement, not a
+server benchmark. 13 of 16 runs valid.
+
+- **Every run converged** (all 16, from 320 to 3,840 edits a second):
+  every edit acknowledged, all 32 people on the same board, and the board
+  on disk the same on both servers.
+- **At 320 edits a second** (32 people moving something 10 times a second
+  each), an edit reached the others in about 2 ms, median (2.1-2.2 ms on
+  one server; 2.3-2.5 ms crossing to the other server through Redis).
+- **A second server made edits between servers slower under load:** a
+  median of 24-27 ms at 1,920 edits a second and 69-112 ms at 3,840,
+  against 3.2 and 22 ms with everyone on one server. Why is not
+  established (see `bench/RESULTS.md`): both servers write one SQLite file,
+  one at a time, and each waits for its writes synchronously.
 
 ## Who else is here
 
@@ -402,7 +532,7 @@ What it does **not** do yet:
 
 | Path | Answer |
 |------|--------|
-| `GET /healthz` | `{"status": "ok", "version": "0.1.0"}`; 503 with the error if boards cannot be stored |
+| `GET /healthz` | `{"status": "ok", "version": "0.1.0", "bus": "off"}`; `bus` is `connected` or `disconnected` for a server sharing boards through Redis (reported, not required); 503 with the error if boards cannot be stored |
 | `GET /`, `GET /b/<id>` | the client's `index.html`, `Cache-Control: no-cache`; a malformed board id is a 404 |
 | `GET /assets/<name>` | a built file, cached for a year (`immutable`): its name has a content hash |
 | `/ws` | the WebSocket; over plain HTTP, 426 |
@@ -417,7 +547,14 @@ make install     # npm ci for all three packages
 make check       # ESLint (type-aware), tsc -b (tests included), Vitest, build
 make dev-server  # the server on :8000, restarting on changes
 make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
+make test-redis  # the bus tests against a real Redis, in a throwaway container
+make bench       # the load test (bench/run.ts): about 10 minutes, in Docker
 ```
+
+Settings, all optional: `SYNCBOARD_PORT`, `SYNCBOARD_DATA_DIR`,
+`SYNCBOARD_MAX_BOARDS`, `SYNCBOARD_MAX_SHAPES`, `SYNCBOARD_REDIS_URL`
+(`redis://host:port`, for servers sharing boards), `SYNCBOARD_POLL_MS`
+(500, how often a room checks the disk) and `SYNCBOARD_ROSTER_MS` (2000).
 
 ## Layout
 
@@ -442,8 +579,15 @@ make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
 | `client/src/People.tsx`, `client/src/canvas/Peers.tsx` | Who is here; others' pointers and selections |
 | `shared/src/presence.ts` | Presence: its type and its check |
 | `server/src/sync.ts` | One connection's protocol: hello, checks, apply, relay, ack |
-| `server/src/rooms.ts` | The boards being served: one room and one replica each, loaded from and written to the store; limits |
-| `server/src/store.ts` | Boards on disk (SQLite): their registers and epochs |
+| `server/src/rooms.ts` | The boards being served: one room and one replica each, loaded from and written to the store, kept in step with other servers; limits |
+| `server/src/store.ts` | Boards on disk (SQLite): their registers, epochs and change numbers; the schema's upgrade |
+| `server/src/bus.ts` | What servers tell each other, checked on arrival; the in-process LocalNetwork tests use |
+| `server/src/redis-bus.ts` | The bus over Redis pub/sub |
+| `server/src/replicas.test.ts` | Two servers, one board: lost, reordered and missing messages; presence across them |
+| `server/src/redis-bus.test.ts` | The bus against a real Redis (`make test-redis`) |
+| `e2e/replicas.test.ts` | Four sync clients on two servers, a failing bus, restarts: the property test |
+| `compose.replicas.yaml`, `scripts/smoke-replicas.sh` | Two servers and Redis, and their smoke test |
+| `bench/load.ts`, `bench/run.ts` | The load generator, and the benchmark around it |
 | `server/src/store.test.ts` | The store: round trip, replacing, all-or-nothing saves, damaged rows |
 | `e2e/crash.test.ts` | The server as its own process, SIGKILLed six times while edits pour in |
 | `shared/src/board/snapshot.ts` | A whole board on the wire; chunking it; merging one |
@@ -548,6 +692,28 @@ make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
   the server.
 - **Board ids are 12 random base-62 characters** (71 bits): the link is
   the only key to a board, so it must not be guessable.
+- **Servers share boards through the disk first, Redis second.** The bus
+  makes an edit reach the other server's people in milliseconds; the
+  numbered writes make it reach them at all. The alternative, a log on
+  Redis Streams that servers read from where they left off, would have
+  made Redis part of keeping the board correct; here it can go away and
+  the boards stay right.
+- **Every server hears every board it has loaded, not every board.** One
+  pub/sub channel per board, joined when the board is loaded and left
+  when it is dropped. Joining is not instant: what is published before the
+  subscription takes is found on disk at the next ticks.
+- **One Redis connection to publish on, one to listen on:** a subscribed
+  Redis connection can do nothing else. The publisher does not queue while
+  disconnected (`disableOfflineQueue`): a publish then is dropped and
+  counted, rather than kept in memory for as long as Redis is gone.
+- **A room checks the disk every 500 ms,** one indexed read of one row
+  per loaded board; a missing change is read from disk only if it is
+  still missing at the next tick, so messages that are merely late (or
+  out of order: two servers publish independently) cost nothing.
+- **The merge rule stays in TypeScript, on the disk too.** Two servers'
+  writes to one register must keep the later one; the store reads the
+  register inside its write transaction and asks the replica's `wins`,
+  rather than putting a second copy of the rule in SQL.
 - **Not yet:** accounts, permissions, and an `Origin` check on the
   WebSocket. Anyone with a board's link can draw on it; anyone who can
   reach the port can make boards, up to the limit (1,000 boards of 20,000
@@ -658,3 +824,31 @@ make dev-client  # the client on :5173, forwarding /healthz and /ws to :8000
     the operation); SQLite refused to store an object, which is how it
     showed. I had run the tests on their own; `npm run check` runs the
     type checker first, which names the real error.
+17. **Two servers starting together: one died, "database is locked".**
+    The benchmark's first two-server stack, on a new volume, lost server
+    `a` at once. Switching a new file to WAL takes a lock, and SQLite
+    answers "locked" there at once, whatever the busy timeout. A test now
+    starts four processes opening one new database at the same moment
+    (before the fix: failed 3 runs of 3; 3 of 32 processes in a count by
+    hand); the switch is retried for up to 5 s, and 40 openings since have
+    all succeeded.
+18. **Two Compose services built one image name at once,** and one build
+    failed ("image already exists") in 2 of the first 4 smoke runs that
+    had to build it. The first failure was hidden by my own output filter
+    and only showed up again on a deliberate rerun from no image. Each
+    server now builds its own image name (the second from the build
+    cache); 3 runs from no image passed since.
+19. **Two tests lost the wrong copy of a message.** A server that publishes
+    a message also gets its own copy back (and ignores it). "Lose the
+    first message" lost that copy, so the other server got everything and
+    the test checked nothing; it passed only while timing hid it, then
+    failed 7 times in 10. The end-to-end test's "lose one message in two"
+    had the same flaw: with two copies per message, it lost only the
+    sender's own. Both now lose only copies on their way to the other
+    server; the planted bug "a later number skips a missing one" is now
+    caught by three tests instead of two.
+20. **The load generator looked 10 ms behind while idle.** Node's
+    event-loop delay histogram includes its own sampling interval (10 ms),
+    which the first exploratory run reported as lag: a 20 ms validity
+    limit would have meant little. Checked against an idle process (median
+    11 ms); the generator now reports the delay past the interval.

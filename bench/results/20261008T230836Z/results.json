@@ -1,0 +1,1367 @@
+{
+  "environment": {
+    "started": "2026-10-08T23:08:38.836Z",
+    "commit": "f4c46ff",
+    "uncommitted": false,
+    "host": {
+      "model": "Mac14,2",
+      "cpu": "Apple M2",
+      "memoryGb": 8,
+      "macos": "26.5.2"
+    },
+    "docker": "29.2.1, 8 CPUs, 4108828672 bytes, kernel 6.12.72-linuxkit",
+    "node": "v24.21.0",
+    "redis": "Starting Redis Server\nRedis server v=8.10.2 sha=00000000:1 malloc=jemalloc-5.3.0 bits=64 build=733afb4c18605b55",
+    "swapAtStart": "total = 10240.00M  used = 9389.19M  free = 850.81M  (encrypted)",
+    "busyAtStart": [
+      {
+        "cpu": 167.3,
+        "command": "/System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine"
+      },
+      {
+        "cpu": 159,
+        "command": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd"
+      },
+      {
+        "cpu": 38.1,
+        "command": "/Applications/Docker.app/Contents/MacOS/com.docker.backend"
+      }
+    ],
+    "method": {
+      "clients": 32,
+      "durationS": 8,
+      "warmupS": 3,
+      "passes": 2,
+      "swapLimitMb": 50,
+      "lagLimitMs": 20
+    },
+    "finished": "2026-10-08T23:14:42.148Z",
+    "swapAtEnd": "total = 10240.00M  used = 9388.25M  free = 851.75M  (encrypted)",
+    "busyAtEnd": [
+      {
+        "cpu": 127,
+        "command": "/System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine"
+      },
+      {
+        "cpu": 62.1,
+        "command": "/Applications/Docker.app/Contents/MacOS/com.docker.backend"
+      },
+      {
+        "cpu": 22.7,
+        "command": "/System/Library/PrivateFrameworks/FileProvider.framework/Support/fileproviderd"
+      }
+    ]
+  },
+  "runs": [
+    {
+      "pass": 1,
+      "config": {
+        "topology": "one",
+        "rate": 10
+      },
+      "valid": true,
+      "why": [],
+      "swapInMb": 9.09375,
+      "containers": {
+        "load-run-729d4cb75333": "20.36% 78.42MiB / 3.827GiB",
+        "b-1": "0.09% 75.15MiB / 3.827GiB",
+        "a-1": "25.40% 96.06MiB / 3.827GiB",
+        "redis-1": "2.45% 11.35MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 10,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 1,
+          "board": "load1mv05eczu"
+        },
+        "sent": {
+          "total": 3570,
+          "measured": 2560
+        },
+        "offeredPerSecond": 320,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 2560,
+          "mean": 2.613,
+          "p50": 2.36,
+          "p90": 3.653,
+          "p99": 9.726,
+          "max": 23.451
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 79360,
+            "mean": 2.39,
+            "p50": 2.152,
+            "p90": 3.374,
+            "p99": 9.39,
+            "max": 23.432
+          },
+          "otherServer": null
+        },
+        "receipts": {
+          "expected": 79360,
+          "got": 79360
+        },
+        "generatorLagMs": {
+          "p50": 0.166,
+          "p99": 1.6,
+          "max": 2.28
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 0,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 7,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 1,
+      "config": {
+        "topology": "two",
+        "rate": 10
+      },
+      "valid": true,
+      "why": [],
+      "swapInMb": 33.421875,
+      "containers": {
+        "load-run-46cf1f70540b": "19.24% 78.04MiB / 3.827GiB",
+        "a-1": "21.17% 96.7MiB / 3.827GiB",
+        "b-1": "15.78% 90.96MiB / 3.827GiB",
+        "redis-1": "3.04% 11.37MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws",
+            "ws://b:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 10,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 2,
+          "board": "load2mv05euh5"
+        },
+        "sent": {
+          "total": 3570,
+          "measured": 2560
+        },
+        "offeredPerSecond": 320,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 2560,
+          "mean": 2.784,
+          "p50": 2.023,
+          "p90": 3.372,
+          "p99": 26.886,
+          "max": 70.719
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 38355,
+            "mean": 2.627,
+            "p50": 1.931,
+            "p90": 3.223,
+            "p99": 22.558,
+            "max": 70.696
+          },
+          "otherServer": {
+            "count": 40752,
+            "mean": 3.494,
+            "p50": 2.305,
+            "p90": 4.433,
+            "p99": 38.369,
+            "max": 89.978
+          }
+        },
+        "receipts": {
+          "expected": 79360,
+          "got": 79107
+        },
+        "generatorLagMs": {
+          "p50": 0.158,
+          "p99": 2.042,
+          "max": 5.573
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 0,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 7,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true,
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 1,
+      "config": {
+        "topology": "one",
+        "rate": 30
+      },
+      "valid": false,
+      "why": [
+        "host swapped in 82 MB"
+      ],
+      "swapInMb": 82.015625,
+      "containers": {
+        "load-run-88c71c2a41b6": "32.42% 127.6MiB / 3.827GiB",
+        "b-1": "17.31% 76.32MiB / 3.827GiB",
+        "a-1": "31.88% 94.23MiB / 3.827GiB",
+        "redis-1": "2.22% 11.38MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 30,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 3,
+          "board": "load3mv05fbvk"
+        },
+        "sent": {
+          "total": 10610,
+          "measured": 7680
+        },
+        "offeredPerSecond": 960,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 7680,
+          "mean": 4.509,
+          "p50": 2.091,
+          "p90": 4.152,
+          "p99": 75.337,
+          "max": 184.967
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 235972,
+            "mean": 3.655,
+            "p50": 1.973,
+            "p90": 3.816,
+            "p99": 52.956,
+            "max": 176.328
+          },
+          "otherServer": null
+        },
+        "receipts": {
+          "expected": 238080,
+          "got": 235972
+        },
+        "generatorLagMs": {
+          "p50": 0.035,
+          "p99": 2.468,
+          "max": 23.26
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 0,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 5,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 1,
+      "config": {
+        "topology": "two",
+        "rate": 30
+      },
+      "valid": false,
+      "why": [
+        "host swapped in 161 MB"
+      ],
+      "swapInMb": 160.90625,
+      "containers": {
+        "load-run-b88345c8b609": "45.97% 119.2MiB / 3.827GiB",
+        "a-1": "45.44% 96.98MiB / 3.827GiB",
+        "b-1": "23.04% 100.4MiB / 3.827GiB",
+        "redis-1": "2.66% 11.47MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws",
+            "ws://b:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 30,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 4,
+          "board": "load4mv05ftdc"
+        },
+        "sent": {
+          "total": 10610,
+          "measured": 7680
+        },
+        "offeredPerSecond": 960,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 7680,
+          "mean": 11.653,
+          "p50": 3.94,
+          "p90": 22.361,
+          "p99": 166.913,
+          "max": 271.652
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 109065,
+            "mean": 9.04,
+            "p50": 3.612,
+            "p90": 17.045,
+            "p99": 116.16,
+            "max": 269.163
+          },
+          "otherServer": {
+            "count": 109024,
+            "mean": 15.287,
+            "p50": 7.475,
+            "p90": 32.472,
+            "p99": 130.131,
+            "max": 295.862
+          }
+        },
+        "receipts": {
+          "expected": 238080,
+          "got": 218089
+        },
+        "generatorLagMs": {
+          "p50": 0.076,
+          "p99": 2.476,
+          "max": 17.836
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 22,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 7,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true,
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 1,
+      "config": {
+        "topology": "one",
+        "rate": 60
+      },
+      "valid": false,
+      "why": [
+        "host swapped in 117 MB"
+      ],
+      "swapInMb": 116.546875,
+      "containers": {
+        "load-run-82acfe4ba836": "45.02% 132.9MiB / 3.827GiB",
+        "a-1": "46.54% 111MiB / 3.827GiB",
+        "b-1": "0.06% 76.07MiB / 3.827GiB",
+        "redis-1": "0.54% 11.42MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 60,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 5,
+          "board": "load5mv05gayg"
+        },
+        "sent": {
+          "total": 21171,
+          "measured": 15360
+        },
+        "offeredPerSecond": 1920,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 15360,
+          "mean": 12.339,
+          "p50": 5.013,
+          "p90": 31.393,
+          "p99": 106.018,
+          "max": 205.403
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 437441,
+            "mean": 8.784,
+            "p50": 4.318,
+            "p90": 20.465,
+            "p99": 66.575,
+            "max": 172.767
+          },
+          "otherServer": null
+        },
+        "receipts": {
+          "expected": 476160,
+          "got": 437441
+        },
+        "generatorLagMs": {
+          "p50": 0.002,
+          "p99": 3.214,
+          "max": 67.529
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 25,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 6,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 1,
+      "config": {
+        "topology": "two",
+        "rate": 60
+      },
+      "valid": true,
+      "why": [],
+      "swapInMb": 14.9375,
+      "containers": {
+        "load-run-160d30b7d4b8": "29.58% 133.7MiB / 3.827GiB",
+        "a-1": "36.42% 105.4MiB / 3.827GiB",
+        "b-1": "24.99% 99.15MiB / 3.827GiB",
+        "redis-1": "2.64% 11.49MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws",
+            "ws://b:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 60,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 6,
+          "board": "load6mv05gsdd"
+        },
+        "sent": {
+          "total": 21171,
+          "measured": 15360
+        },
+        "offeredPerSecond": 1920,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 15360,
+          "mean": 65.779,
+          "p50": 10.678,
+          "p90": 183.81,
+          "p99": 775.796,
+          "max": 1115.984
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 172575,
+            "mean": 17.881,
+            "p50": 6.052,
+            "p90": 33.253,
+            "p99": 228.673,
+            "max": 641.735
+          },
+          "otherServer": {
+            "count": 139904,
+            "mean": 70.48,
+            "p50": 27.07,
+            "p90": 208.065,
+            "p99": 482.543,
+            "max": 654.803
+          }
+        },
+        "receipts": {
+          "expected": 476160,
+          "got": 312479
+        },
+        "generatorLagMs": {
+          "p50": 0.174,
+          "p99": 2.165,
+          "max": 3.345
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 21,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 5,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true,
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 1,
+      "config": {
+        "topology": "one",
+        "rate": 120
+      },
+      "valid": true,
+      "why": [],
+      "swapInMb": 44.140625,
+      "containers": {
+        "load-run-3ca54b87a724": "55.98% 206.4MiB / 3.827GiB",
+        "b-1": "0.09% 74.45MiB / 3.827GiB",
+        "a-1": "52.12% 180.1MiB / 3.827GiB",
+        "redis-1": "0.32% 11.39MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 120,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 7,
+          "board": "load7mv05h9s0"
+        },
+        "sent": {
+          "total": 42290,
+          "measured": 30720
+        },
+        "offeredPerSecond": 3840,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 30720,
+          "mean": 41.552,
+          "p50": 36.067,
+          "p90": 76.319,
+          "p99": 168.764,
+          "max": 346.94
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 520552,
+            "mean": 25.364,
+            "p50": 22.009,
+            "p90": 48.187,
+            "p99": 78.623,
+            "max": 194.697
+          },
+          "otherServer": null
+        },
+        "receipts": {
+          "expected": 952320,
+          "got": 520552
+        },
+        "generatorLagMs": {
+          "p50": 0.002,
+          "p99": 1.338,
+          "max": 14.543
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 41,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 4,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 1,
+      "config": {
+        "topology": "two",
+        "rate": 120
+      },
+      "valid": true,
+      "why": [],
+      "swapInMb": 13.4375,
+      "containers": {
+        "load-run-ddb0912fd481": "46.29% 183.3MiB / 3.827GiB",
+        "b-1": "38.16% 108.3MiB / 3.827GiB",
+        "a-1": "52.28% 104.6MiB / 3.827GiB",
+        "redis-1": "2.37% 11.51MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws",
+            "ws://b:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 120,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 8,
+          "board": "load8mv05hr4w"
+        },
+        "sent": {
+          "total": 42290,
+          "measured": 30720
+        },
+        "offeredPerSecond": 3840,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 30720,
+          "mean": 62.303,
+          "p50": 14.799,
+          "p90": 193.666,
+          "p99": 468.758,
+          "max": 699.745
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 283995,
+            "mean": 15.56,
+            "p50": 3.659,
+            "p90": 42.565,
+            "p99": 167.876,
+            "max": 472.41
+          },
+          "otherServer": {
+            "count": 201056,
+            "mean": 101.27,
+            "p50": 69.175,
+            "p90": 224.706,
+            "p99": 426.804,
+            "max": 527.734
+          }
+        },
+        "receipts": {
+          "expected": 952320,
+          "got": 485051
+        },
+        "generatorLagMs": {
+          "p50": 0.043,
+          "p99": 2.632,
+          "max": 3.943
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 22,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 4,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true,
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 2,
+      "config": {
+        "topology": "two",
+        "rate": 120
+      },
+      "valid": true,
+      "why": [],
+      "swapInMb": 28.6875,
+      "containers": {
+        "load-run-9ab18d4b550c": "49.53% 139.6MiB / 3.827GiB",
+        "b-1": "11.26% 112.5MiB / 3.827GiB",
+        "a-1": "47.93% 105.1MiB / 3.827GiB",
+        "redis-1": "1.57% 11.46MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws",
+            "ws://b:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 120,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 9,
+          "board": "load9mv05i8gs"
+        },
+        "sent": {
+          "total": 42290,
+          "measured": 30720
+        },
+        "offeredPerSecond": 3840,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 30720,
+          "mean": 141.019,
+          "p50": 22.824,
+          "p90": 433.775,
+          "p99": 1381.834,
+          "max": 1738.159
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 269790,
+            "mean": 23.871,
+            "p50": 4.658,
+            "p90": 55.979,
+            "p99": 342.287,
+            "max": 749.171
+          },
+          "otherServer": {
+            "count": 175344,
+            "mean": 178.226,
+            "p50": 111.48,
+            "p90": 457.812,
+            "p99": 746.428,
+            "max": 958.156
+          }
+        },
+        "receipts": {
+          "expected": 952320,
+          "got": 445134
+        },
+        "generatorLagMs": {
+          "p50": 0.011,
+          "p99": 2.329,
+          "max": 25.979
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 84,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 5,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true,
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 2,
+      "config": {
+        "topology": "one",
+        "rate": 120
+      },
+      "valid": true,
+      "why": [],
+      "swapInMb": 43.453125,
+      "containers": {
+        "load-run-9e01aac77b81": "61.48% 191.2MiB / 3.827GiB",
+        "b-1": "0.11% 74.93MiB / 3.827GiB",
+        "a-1": "59.41% 174.7MiB / 3.827GiB",
+        "redis-1": "1.31% 12.24MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 120,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 10,
+          "board": "load10mv05ipv2"
+        },
+        "sent": {
+          "total": 42290,
+          "measured": 30720
+        },
+        "offeredPerSecond": 3840,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 30720,
+          "mean": 63.176,
+          "p50": 39.287,
+          "p90": 120.036,
+          "p99": 498.905,
+          "max": 682.308
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 485553,
+            "mean": 27.924,
+            "p50": 22.451,
+            "p90": 53.009,
+            "p99": 123.738,
+            "max": 332.745
+          },
+          "otherServer": null
+        },
+        "receipts": {
+          "expected": 952320,
+          "got": 485553
+        },
+        "generatorLagMs": {
+          "p50": 0.011,
+          "p99": 4.123,
+          "max": 17.492
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 42,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 4,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 2,
+      "config": {
+        "topology": "two",
+        "rate": 60
+      },
+      "valid": true,
+      "why": [],
+      "swapInMb": 23.234375,
+      "containers": {
+        "load-run-ac400eee7016": "41.74% 135.4MiB / 3.827GiB",
+        "b-1": "32.43% 103.1MiB / 3.827GiB",
+        "a-1": "30.77% 106.8MiB / 3.827GiB",
+        "redis-1": "1.72% 11.42MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws",
+            "ws://b:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 60,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 11,
+          "board": "load11mv05j7c3"
+        },
+        "sent": {
+          "total": 21171,
+          "measured": 15360
+        },
+        "offeredPerSecond": 1920,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 15360,
+          "mean": 19.189,
+          "p50": 8.921,
+          "p90": 44.33,
+          "p99": 174.735,
+          "max": 303.195
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 190905,
+            "mean": 12.933,
+            "p50": 6.225,
+            "p90": 30.245,
+            "p99": 94.776,
+            "max": 267.237
+          },
+          "otherServer": {
+            "count": 158704,
+            "mean": 32.692,
+            "p50": 24.433,
+            "p90": 61.065,
+            "p99": 175.622,
+            "max": 312.399
+          }
+        },
+        "receipts": {
+          "expected": 476160,
+          "got": 349609
+        },
+        "generatorLagMs": {
+          "p50": 0.158,
+          "p99": 2.345,
+          "max": 6.22
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 23,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 6,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true,
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 2,
+      "config": {
+        "topology": "one",
+        "rate": 60
+      },
+      "valid": true,
+      "why": [],
+      "swapInMb": 17.109375,
+      "containers": {
+        "load-run-98ea17d8db75": "37.62% 136.5MiB / 3.827GiB",
+        "b-1": "2.12% 75.29MiB / 3.827GiB",
+        "a-1": "45.79% 106.2MiB / 3.827GiB",
+        "redis-1": "1.20% 11.44MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 60,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 12,
+          "board": "load12mv05josx"
+        },
+        "sent": {
+          "total": 21171,
+          "measured": 15360
+        },
+        "offeredPerSecond": 1920,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 15360,
+          "mean": 6.118,
+          "p50": 3.419,
+          "p90": 12.221,
+          "p99": 47.791,
+          "max": 139.271
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 460722,
+            "mean": 5.179,
+            "p50": 3.249,
+            "p90": 10.342,
+            "p99": 31.511,
+            "max": 105.307
+          },
+          "otherServer": null
+        },
+        "receipts": {
+          "expected": 476160,
+          "got": 460722
+        },
+        "generatorLagMs": {
+          "p50": 0.002,
+          "p99": 2.886,
+          "max": 7.547
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 24,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 5,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 2,
+      "config": {
+        "topology": "two",
+        "rate": 30
+      },
+      "valid": true,
+      "why": [],
+      "swapInMb": 12.0625,
+      "containers": {
+        "load-run-14357098f5c3": "29.48% 116.7MiB / 3.827GiB",
+        "b-1": "26.06% 90MiB / 3.827GiB",
+        "a-1": "23.67% 97.53MiB / 3.827GiB",
+        "redis-1": "2.58% 11.43MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws",
+            "ws://b:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 30,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 13,
+          "board": "load13mv05k6a7"
+        },
+        "sent": {
+          "total": 10610,
+          "measured": 7680
+        },
+        "offeredPerSecond": 960,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 7680,
+          "mean": 7.523,
+          "p50": 3.881,
+          "p90": 16.902,
+          "p99": 53.719,
+          "max": 119.074
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 110445,
+            "mean": 6.549,
+            "p50": 3.627,
+            "p90": 14.78,
+            "p99": 44.01,
+            "max": 119.065
+          },
+          "otherServer": {
+            "count": 112032,
+            "mean": 13.326,
+            "p50": 8.365,
+            "p90": 29.168,
+            "p99": 78.697,
+            "max": 145.145
+          }
+        },
+        "receipts": {
+          "expected": 238080,
+          "got": 222477
+        },
+        "generatorLagMs": {
+          "p50": 0.093,
+          "p99": 2.132,
+          "max": 3.025
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 21,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 6,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true,
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 2,
+      "config": {
+        "topology": "one",
+        "rate": 30
+      },
+      "valid": true,
+      "why": [],
+      "swapInMb": 3.375,
+      "containers": {
+        "load-run-075e18482e00": "26.13% 127.2MiB / 3.827GiB",
+        "b-1": "0.04% 74.94MiB / 3.827GiB",
+        "a-1": "32.61% 98.89MiB / 3.827GiB",
+        "redis-1": "2.26% 11.37MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 30,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 14,
+          "board": "load14mv05kns3"
+        },
+        "sent": {
+          "total": 10610,
+          "measured": 7680
+        },
+        "offeredPerSecond": 960,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 7680,
+          "mean": 3.356,
+          "p50": 2.311,
+          "p90": 3.748,
+          "p99": 30.498,
+          "max": 92.132
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 236778,
+            "mean": 3.004,
+            "p50": 2.188,
+            "p90": 3.599,
+            "p99": 26.186,
+            "max": 91.618
+          },
+          "otherServer": null
+        },
+        "receipts": {
+          "expected": 238080,
+          "got": 236778
+        },
+        "generatorLagMs": {
+          "p50": 0.428,
+          "p99": 2.968,
+          "max": 3.787
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 23,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 5,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 2,
+      "config": {
+        "topology": "two",
+        "rate": 10
+      },
+      "valid": true,
+      "why": [],
+      "swapInMb": 4.25,
+      "containers": {
+        "load-run-e435ce84a336": "19.33% 77.24MiB / 3.827GiB",
+        "a-1": "16.84% 90.59MiB / 3.827GiB",
+        "b-1": "16.29% 96.08MiB / 3.827GiB",
+        "redis-1": "1.82% 11.35MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws",
+            "ws://b:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 10,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 15,
+          "board": "load15mv05l54i"
+        },
+        "sent": {
+          "total": 3570,
+          "measured": 2560
+        },
+        "offeredPerSecond": 320,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 2560,
+          "mean": 2.362,
+          "p50": 2.193,
+          "p90": 3.514,
+          "p99": 4.598,
+          "max": 8.291
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 38400,
+            "mean": 2.262,
+            "p50": 2.096,
+            "p90": 3.402,
+            "p99": 4.478,
+            "max": 8.254
+          },
+          "otherServer": {
+            "count": 40912,
+            "mean": 2.806,
+            "p50": 2.502,
+            "p90": 4.625,
+            "p99": 7.171,
+            "max": 12.311
+          }
+        },
+        "receipts": {
+          "expected": 79360,
+          "got": 79312
+        },
+        "generatorLagMs": {
+          "p50": 0.486,
+          "p99": 2.542,
+          "max": 3.566
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 0,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 9,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true,
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    },
+    {
+      "pass": 2,
+      "config": {
+        "topology": "one",
+        "rate": 10
+      },
+      "valid": true,
+      "why": [],
+      "swapInMb": 10.84375,
+      "containers": {
+        "load-run-3ae8d67ed979": "19.51% 78.82MiB / 3.827GiB",
+        "a-1": "25.66% 98.8MiB / 3.827GiB",
+        "b-1": "0.09% 71.86MiB / 3.827GiB",
+        "redis-1": "2.21% 11.33MiB / 3.827GiB"
+      },
+      "result": {
+        "options": {
+          "targets": [
+            "ws://a:8000/ws"
+          ],
+          "clients": 32,
+          "rate": 10,
+          "warmupS": 3,
+          "durationS": 8,
+          "shapes": 50,
+          "seed": 16,
+          "board": "load16mv05lmmv"
+        },
+        "sent": {
+          "total": 3570,
+          "measured": 2560
+        },
+        "offeredPerSecond": 320,
+        "unacknowledged": 0,
+        "ackMs": {
+          "count": 2560,
+          "mean": 2.398,
+          "p50": 2.295,
+          "p90": 3.388,
+          "p99": 4.777,
+          "max": 8.878
+        },
+        "propagationMs": {
+          "sameServer": {
+            "count": 79360,
+            "mean": 2.181,
+            "p50": 2.086,
+            "p90": 3.137,
+            "p99": 4.32,
+            "max": 8.861
+          },
+          "otherServer": null
+        },
+        "receipts": {
+          "expected": 79360,
+          "got": 79360
+        },
+        "generatorLagMs": {
+          "p50": 0.174,
+          "p99": 1.469,
+          "max": 2.73
+        },
+        "end": {
+          "allAcknowledged": true,
+          "ackedAfterMs": 0,
+          "everyoneAgrees": true,
+          "agreedAfterMs": 10,
+          "distinctBoards": 1,
+          "shapes": 50,
+          "diskMatches": [
+            true
+          ]
+        },
+        "closes": 0,
+        "errors": []
+      }
+    }
+  ]
+}
