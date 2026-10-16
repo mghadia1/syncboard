@@ -8,8 +8,10 @@ It deliberately does not use Yjs, Automerge, Liveblocks, Socket.IO,
 tldraw, Excalidraw, Konva or Fabric: the point is to build the sync (a CRDT
 for the board, and a WebSocket protocol to carry it) and the drawing.
 
-> **Status:** all seven milestones built (locally; there is no GitHub repo
-> yet, so CI has never run). Boards are shared: everyone with a
+> **Status:** all seven milestones built and tested locally, then pushed
+> to GitHub on 2026-10-15, where CI — lint, typecheck, Vitest with a real
+> Redis, and two Docker Compose smoke tests — passed on the first run.
+> Boards are shared: everyone with a
 > board's link draws on it at once (shapes, arrows, freehand, notes;
 > select, move, resize, recolor, restack, delete; pan and zoom), sees who
 > else is there with their pointers and selections, keeps drawing through
@@ -680,7 +682,7 @@ Every file, by folder. Tests sit beside what they test.
 | `compose.yaml`, `compose.replicas.yaml`, `Dockerfile` | One server; two servers and Redis; the image (non-root, health-checked) |
 | `Makefile`, `package.json` | Every command; the npm workspaces |
 | `tsconfig*.json`, `eslint.config.js`, `vitest.config.ts` | Strict TypeScript for every package, type-aware linting, the four test projects |
-| `.github/workflows/ci.yml` | CI: checks with Redis, the one-server smoke test, the two-server one (never run yet) |
+| `.github/workflows/ci.yml` | CI: checks with Redis, the one-server smoke test, the two-server one (green since 2026-10-15) |
 | `docs/explain-it-yourself.md` | The questions to answer before this goes near a resume |
 
 ## Design decisions
